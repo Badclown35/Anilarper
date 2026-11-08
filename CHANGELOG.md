@@ -9,6 +9,8 @@ All notable changes to Anilarper are documented here.
 - Restore now checks backup format/version and rejects empty preferences, saves a safety snapshot in a separate preferences file before replacement, and refreshes in-memory library/profile state after success.
 - Persisted anime season, season year, genres, and studios for statistics and metadata continuity.
 - Corrected episode decrement/status behavior; marking a title completed fills known episode progress, and watch-status/progress changes update activity timestamps.
-- Local audio picker now uses the provider's display filename.
+- Local audio picker now uses the provider's display filename; shuffle no longer overwrites saved track order.
+- Music playback now requests audio focus and releases MediaPlayer instances on setup/error paths.
+- Navigation selection survives rotation, Back returns to Home, and stale Discover searches are cancelled.
 
 > Device verification is still required; this phase is not considered complete until music and backup/restore are tested on a phone.
