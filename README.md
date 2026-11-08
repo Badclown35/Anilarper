@@ -2,13 +2,16 @@
 
 A personal, native Android anime, manga, light-novel, and soundtrack companion built around rediscovery, tracking, and low-pressure exploration.
 
-## Current build: 0.6.0
+## Current build: 0.7.0
 
 - Kotlin + Jetpack Compose; modern dark interface with violet accents
 - Home, Discover, Library, Read, Music, Quests, and Profile sections
 - Paginated anime trending and title search through the AniList GraphQL API
 - Seasonal browsing by season and year, with genre, format, status, and sort filters
-- Expanded anime details with genres, studios, season metadata, synopsis, and connected franchise entries
+- Expanded anime details with genres, studios, season metadata, and synopsis
+- Multi-hop franchise maps that follow AniList sequel, prequel, movie, OVA, special, side-story, and other relationship edges
+- Franchise entries can be opened directly from the map, including titles not yet saved in your library
+- Franchise scans show their coverage and disclose when AniList relationship data or scan limits may leave gaps
 - Anime details, cover art, episode counts, scores, and synopsis
 - Local anime library with episode progress and five watch statuses
 - Manga and light-novel discovery through AniList
@@ -68,3 +71,11 @@ Profile settings and quest progress are stored locally. Avatar images are loaded
 
 Streaming links are bookmarks/launch points; they are not downloaded or re-hosted by Anilarper. In-app playback for third-party services requires each service's permitted player/embed integration and is a separate follow-up.
 \n\n## 0.6.0 — Discovery & Franchise Update\n\n- Paginated anime catalog results with a Load more control.\n- Browse by season and year, genre, format, release status, and sort order.\n- Expanded title details with genres, studios, season/year, and synopsis.\n- Connected anime entries with relationship labels for sequels, prequels, side stories, movies, and other franchise links.\n- Search and catalog loading errors now offer a retry path; AniList rate-limit responses are handled with a clear message.\n- Existing local anime, reading, profile, quest, and music data formats remain unchanged.\n
+
+## 0.7.0 — Franchise Completeness Update
+
+- Replaced the one-hop connected-title list with a multi-hop franchise graph scan.
+- Follows AniList relationship edges across multiple connected anime, with duplicate protection and a bounded scan to avoid runaway requests.
+- Shows relation type, format, year, and release status for discovered entries.
+- Franchise maps include catalog entries whether or not they are in the user's library.
+- Clearly labels potentially incomplete results because upstream relationship metadata is not guaranteed to be exhaustive.
