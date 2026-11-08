@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -32,8 +33,8 @@ fun ReadingScreen(
     onUpdate: (ReadingTitle) -> Unit,
     onRemove: (ReadingTitle) -> Unit
 ) {
-    var novels by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
+    var novels by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
     var results by remember { mutableStateOf<List<ReadingTitle>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
