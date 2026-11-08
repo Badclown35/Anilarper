@@ -18,8 +18,11 @@ All notable changes to Anilarper are documented here.
 
 ## 1.0.0 — Phase 2 structure (in progress)
 
-- Extracted the Home and Reading screens into dedicated UI packages without changing their feature behavior.
+- Extracted Home, Discover, Library, Reading, Music, Quests, Backup, History, Statistics, and Profile into dedicated `ui/` packages.
+- Moved the shared palette and Material theme into `theme/AppTheme.kt`; MainActivity is now focused on app setup and navigation.
 - Added a LibraryRepository as the single persistence owner for anime and reading collections, retaining SharedPreferences until the planned Room migration in Phase 3.
 - Added AnimeLibraryViewModel and ReadingLibraryViewModel with StateFlow, and connected collection screens to them.
+- Added a DiscoverViewModel cache for result pages so search results survive tab changes; active search jobs are cancelled when Discover leaves composition.
+- Made key screen inputs and profile editor drafts saveable across navigation.
 - Replaced string-based screen switching with Navigation Compose, including saved bottom-tab back stacks and navigation-managed Back behavior.
-- Remaining: extract Discover, Library, Music, and supporting screens; move remaining screen state into screen ViewModels; verify cancellation and result retention across tab switches.
+- Remaining: verify the latest refactor build, review any regressions, and device-test navigation/state restoration. Phase 2 stays open until those checks pass.
