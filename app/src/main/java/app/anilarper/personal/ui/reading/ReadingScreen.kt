@@ -21,34 +21,26 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import app.anilarper.personal.theme.*
 import coil.compose.AsyncImage
-import kotlinx.coroutines.launch
-import app.anilarper.personal.AniListReadingApi
+import app.anilarper.personal.data.ReadingSearchViewModel
 import app.anilarper.personal.ReadingTitle
 
 @Composable
 fun ReadingScreen(
     modifier: Modifier,
     library: List<ReadingTitle>,
+    searchViewModel: ReadingSearchViewModel,
     onAdd: (ReadingTitle) -> Unit,
     onUpdate: (ReadingTitle) -> Unit,
     onRemove: (ReadingTitle) -> Unit
 ) {
     var novels by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
-    var results by remember { mutableStateOf<List<ReadingTitle>>(emptyList()) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
+    val searchState by searchViewModel.state.collectAsState()
+    val results = searchState.results
+    val loading = searchState.loading
+    val error = searchState.error
     val keyboard = LocalSoftwareKeyboardController.current
-    fun search() {
-        scope.launch {
-            loading = true
-            error = null
-            try { results = AniListReadingApi.search(query, novels) }
-            catch (_: Exception) { error = "Catalog unavailable. Check your connection and retry." }
-            finally { loading = false }
-        }
-    }
+    fun search() { searchViewModel.search(query, novels) }
     LaunchedEffect(novels) { search() }
     val visibleSaved = library.filter { it.kind == if (novels) "NOVEL" else "MANGA" }
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
