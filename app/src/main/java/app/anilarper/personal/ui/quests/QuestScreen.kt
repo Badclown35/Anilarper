@@ -20,7 +20,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONArray
 import app.anilarper.personal.*
-import app.anilarper.personal.theme.*
 
 private data class QuestData(val id: String, val title: String, val detail: String,
     val progress: Int, val target: Int, val reward: Int)
