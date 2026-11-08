@@ -44,7 +44,11 @@ import org.json.JSONObject
 private val Ink = Color(0xFF0C0D12)
 private val Panel = Color(0xFF171923)
 private val Panel2 = Color(0xFF202331)
-private val Violet = Color(0xFF9B8CFF)
+private val AccentPalette = listOf(
+    Color(0xFF9B8CFF), Color(0xFF72C8D8), Color(0xFFFF9FBD), Color(0xFFFFC36E), Color(0xFF91CFA5)
+)
+private val VioletState = mutableStateOf(AccentPalette.first())
+private val Violet: Color get() = VioletState.value
 private val Muted = Color(0xFF9A9EAE)
 private val White = Color(0xFFF4F3FA)
 
@@ -63,6 +67,10 @@ private fun AnilarperApp() {
     var moreOpen by remember { mutableStateOf(false) }
     var library by remember { mutableStateOf(loadLibrary(context)) }
     var readingLibrary by remember { mutableStateOf(loadReadingLibrary(context)) }
+    LaunchedEffect(Unit) {
+        val accent = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getInt("profileAccent", 0)
+        VioletState.value = AccentPalette[accent.coerceIn(0, AccentPalette.lastIndex)]
+    }
     MaterialTheme(colorScheme = darkColorScheme(
         background = Ink, surface = Panel, primary = Violet,
         onBackground = White, onSurface = White
@@ -1171,7 +1179,8 @@ private data class ProfileSettings(
     val bio: String = "Finding my next favorite story.",
     val avatarUrl: String = "",
     val bannerStyle: Int = 0,
-    val favoriteTitles: String = ""
+    val favoriteTitles: String = "",
+    val accentStyle: Int = 0
 )
 
 private fun loadProfile(context: Context): ProfileSettings {
@@ -1181,7 +1190,8 @@ private fun loadProfile(context: Context): ProfileSettings {
         p.getString("profileBio", "Finding my next favorite story.") ?: "",
         p.getString("profileAvatar", "") ?: "",
         p.getInt("profileBanner", 0),
-        p.getString("profileFavorites", "") ?: ""
+        p.getString("profileFavorites", "") ?: "",
+        p.getInt("profileAccent", 0)
     )
 }
 
@@ -1192,6 +1202,7 @@ private fun saveProfile(context: Context, profile: ProfileSettings) {
         .putString("profileAvatar", profile.avatarUrl)
         .putInt("profileBanner", profile.bannerStyle)
         .putString("profileFavorites", profile.favoriteTitles)
+        .putInt("profileAccent", profile.accentStyle)
         .apply()
 }
 
@@ -1558,6 +1569,7 @@ private fun ProfileScreen(context: Context, library: List<Anime>,
         var avatar by remember(profile) { mutableStateOf(profile.avatarUrl) }
         var favorites by remember(profile) { mutableStateOf(profile.favoriteTitles) }
         var banner by remember(profile) { mutableIntStateOf(profile.bannerStyle) }
+        var accent by remember(profile) { mutableIntStateOf(profile.accentStyle) }
         AlertDialog(
             onDismissRequest = { editing = false }, containerColor = Panel2,
             title = { Text("Customize your profile", color = White, fontWeight = FontWeight.Bold) },
@@ -1576,6 +1588,17 @@ private fun ProfileScreen(context: Context, library: List<Anime>,
                     Text("Favorite titles", color = Muted, fontSize = 11.sp)
                     OutlinedTextField(favorites, { favorites = it.take(180) }, minLines = 2,
                         placeholder = { Text("Separate titles with commas") })
+                    Text("Accent color", color = Muted, fontSize = 11.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AccentPalette.forEachIndexed { index, color ->
+                            Box(Modifier.weight(1f).height(34.dp)
+                                .background(color, RoundedCornerShape(10.dp))
+                                .clickable { accent = index }) {
+                                if (accent == index) Icon(Icons.Default.Check, null, tint = Ink,
+                                    modifier = Modifier.align(Alignment.Center))
+                            }
+                        }
+                    }
                     Text("Profile banner", color = Muted, fontSize = 11.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         bannerColors.forEachIndexed { index, colors ->
@@ -1591,7 +1614,8 @@ private fun ProfileScreen(context: Context, library: List<Anime>,
             },
             confirmButton = {
                 TextButton(onClick = {
-                    profile = ProfileSettings(name.ifBlank { "Anime Explorer" }, bio, avatar, banner, favorites)
+                    profile = ProfileSettings(name.ifBlank { "Anime Explorer" }, bio, avatar, banner, favorites, accent)
+                    VioletState.value = AccentPalette[accent.coerceIn(0, AccentPalette.lastIndex)]
                     saveProfile(context, profile)
                     editing = false
                 }) { Text("Save profile", color = Violet) }
