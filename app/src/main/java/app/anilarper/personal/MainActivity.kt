@@ -235,6 +235,7 @@ private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, on
     var franchiseLoading by remember { mutableStateOf(false) }
     var franchiseError by remember { mutableStateOf<String?>(null) }
     var franchiseRetry by remember { mutableIntStateOf(0) }
+    var franchiseSortByYear by remember { mutableStateOf(false) }
     var genre by remember { mutableStateOf<String?>(null) }
     var format by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf<String?>(null) }
@@ -429,7 +430,17 @@ private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, on
                         }
                         Text("${graph.entries.size} connected entries found • ${graph.scannedCount} checked",
                             color = Muted, fontSize = 10.sp)
-                        graph.entries.forEach { relation ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Display order", color = Muted, fontSize = 10.sp)
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = { franchiseSortByYear = !franchiseSortByYear }) {
+                                Text(if (franchiseSortByYear) "Release year" else "Relationship", color = Violet, fontSize = 10.sp)
+                            }
+                        }
+                        val orderedEntries = if (franchiseSortByYear) graph.entries.sortedWith(
+                            compareBy<AnimeRelation>({ it.anime.seasonYear ?: 9999 }, { it.anime.title.lowercase() })
+                        ) else graph.entries
+                        orderedEntries.forEach { relation ->
                             Row(Modifier.fillMaxWidth().clickable { selectedAnime = relation.anime }
                                 .background(Panel, RoundedCornerShape(10.dp)).padding(9.dp),
                                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
