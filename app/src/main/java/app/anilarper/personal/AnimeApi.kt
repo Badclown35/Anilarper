@@ -65,14 +65,3074 @@ object AniListApi {
     suspend fun search(query: String, page: Int = 1, filters: AnimeFilters = AnimeFilters()): AnimePage =
         withContext(Dispatchers.IO) {
             val gql = """
-                query (${': String, $page: Int, $genre: [String], $format: MediaFormat,
-                    $status: MediaStatus, $season: MediaSeason, $year: Int, $sort: [MediaSort]) {
-                    Page(page: $page, perPage: 20) {
+                query (${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'
+                Media(id: ${' {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}search: String, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}page: Int, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}genre: [String], ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}format: MediaFormat,
+                    ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}status: MediaStatus, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}season: MediaSeason, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}year: Int, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}sort: [MediaSort]) {
+                    Page(page: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}page, perPage: 20) {
                         pageInfo { currentPage hasNextPage }
-                        media(search: $search, type: ANIME, isAdult: false,
-                            genre_in: $genre, format: $format, status: $status,
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
+                        media(search: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}search, type: ANIME, isAdult: false,
+                            genre_in: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}genre, format: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}format, status: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}status,
+                            season: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}season, seasonYear: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}year, sort: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}sort) {
+                            ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}FIELDS
                         }
                     }
                 }
@@ -256,15 +3316,3056 @@ object AniListReadingApi {
             connection.disconnect()
         }
     }
+}}id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
 }
-}search: String, ${': Int, $genre: [String], $format: MediaFormat,
-                    $status: MediaStatus, $season: MediaSeason, $year: Int, $sort: [MediaSort]) {
-                    Page(page: $page, perPage: 20) {
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}search: String, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}page: Int, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}genre: [String], ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}format: MediaFormat,
+                    ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}status: MediaStatus, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}season: MediaSeason, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}year: Int, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}sort: [MediaSort]) {
+                    Page(page: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}page, perPage: 20) {
                         pageInfo { currentPage hasNextPage }
-                        media(search: $search, type: ANIME, isAdult: false,
-                            genre_in: $genre, format: $format, status: $status,
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
+                        media(search: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}search, type: ANIME, isAdult: false,
+                            genre_in: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}genre, format: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}format, status: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}status,
+                            season: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}season, seasonYear: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}year, sort: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}sort) {
+                            ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}FIELDS
                         }
                     }
                 }
@@ -448,15 +6549,3055 @@ object AniListReadingApi {
             connection.disconnect()
         }
     }
+}}id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
 }
-}page: Int, ${': [String], $format: MediaFormat,
-                    $status: MediaStatus, $season: MediaSeason, $year: Int, $sort: [MediaSort]) {
-                    Page(page: $page, perPage: 20) {
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}search: String, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}page: Int, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}genre: [String], ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}format: MediaFormat,
+                    ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}status: MediaStatus, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}season: MediaSeason, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}year: Int, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}sort: [MediaSort]) {
+                    Page(page: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}page, perPage: 20) {
                         pageInfo { currentPage hasNextPage }
-                        media(search: $search, type: ANIME, isAdult: false,
-                            genre_in: $genre, format: $format, status: $status,
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
+                        media(search: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}search, type: ANIME, isAdult: false,
+                            genre_in: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}genre, format: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}format, status: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}status,
+                            season: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}season, seasonYear: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}year, sort: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}sort) {
+                            ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}FIELDS
                         }
                     }
                 }
@@ -640,19 +9781,1613 @@ object AniListReadingApi {
             connection.disconnect()
         }
     }
+}}id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
 }
-}genre: [String], ${': MediaFormat,
-                    $status: MediaStatus, $season: MediaSeason, $year: Int, $sort: [MediaSort]) {
-                    Page(page: $page, perPage: 20) {
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}search: String, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}page: Int, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}genre: [String], ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}format: MediaFormat,
+                    ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}status: MediaStatus, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}season: MediaSeason, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}year: Int, ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}sort: [MediaSort]) {
+                    Page(page: ${'
+            val variables = JSONObject().put("page", page)
+                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+            if (query.isNotBlank()) variables.put("search", query)
+            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
+            filters.format?.let { variables.put("format", it) }
+            filters.status?.let { variables.put("status", it) }
+            filters.season?.let { variables.put("season", it) }
+            filters.seasonYear?.let { variables.put("year", it) }
+            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
+            val info = root.getJSONObject("pageInfo")
+            val media = root.getJSONArray("media")
+            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
+                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
+        }
+
+    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
+        val gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
+    }
+
+    private fun request(query: String, variables: JSONObject): JSONObject {
+        val body = JSONObject().put("query", query).put("variables", variables)
+        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 18000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) {
+                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
+                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+            }
+            val json = JSONObject(response)
+            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
+            return json
+        } finally { connection.disconnect() }
+    }
+
+    private fun parseAnime(item: JSONObject): Anime {
+        val titles = item.optJSONObject("title") ?: JSONObject()
+        val title = titles.optString("english").takeIf { it.isNotBlank() }
+            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
+        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
+        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
+        val relations = mutableListOf<AnimeRelation>()
+        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val node = edge.optJSONObject("node") ?: continue
+            if (node.optString("type") != "ANIME") continue
+            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
+        }
+        return Anime(
+            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+            format = item.optString("format", "UNKNOWN").replace('_', ' '),
+            status = item.optString("status", "UNKNOWN").replace('_', ' '),
+            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
+            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
+            description = cleanDescription(item.optString("description")),
+            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
+            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
+            genres = item.optJSONArray("genres").toStringList(),
+            studios = studios,
+            relations = relations
+        )
+    }
+
+    private fun JSONObject.copyWithoutRelations(): JSONObject {
+        val copy = JSONObject(toString())
+        copy.remove("relations")
+        return copy
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun cleanDescription(value: String): String = value
+        .replace(Regex("<[^>]*>"), "")
+        .replace("&amp;", "&").replace("&quot;", "\"")
+        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+data class ReadingTitle(
+    val id: Int,
+    val title: String,
+    val nativeTitle: String,
+    val cover: String,
+    val format: String,
+    val status: String,
+    val chapters: Int?,
+    val volumes: Int?,
+    val description: String,
+    val kind: String,
+    val progress: Int = 0,
+    val volumeProgress: Int = 0,
+    val readingStatus: String = "PLANNING"
+)
+
+object AniListReadingApi {
+    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
+        val gql = """
+            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
+                Page(perPage: 20) {
+                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
+                        id
+                        title { romaji english native }
+                        coverImage { large }
+                        format
+                        status
+                        chapters
+                        volumes
+                        description(asHtml: false)
+                    }
+                }
+            }
+        """.trimIndent()
+        val formats = if (novels) JSONArray().put("NOVEL")
+            else JSONArray().put("MANGA").put("ONE_SHOT")
+        val variables = JSONObject()
+            .put("formats", formats)
+            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
+        if (query.isNotBlank()) variables.put("search", query)
+        val body = JSONObject().put("query", gql).put("variables", variables)
+        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("AniList returned HTTP $code")
+            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+            buildList {
+                for (i in 0 until media.length()) {
+                    val item = media.getJSONObject(i)
+                    val titles = item.optJSONObject("title") ?: JSONObject()
+                    val title = titles.optString("english").takeIf { it.isNotBlank() }
+                        ?: titles.optString("romaji").ifBlank { "Untitled" }
+                    add(ReadingTitle(
+                        id = item.optInt("id"),
+                        title = title,
+                        nativeTitle = titles.optString("native"),
+                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
+                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
+                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
+                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
+                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
+                        description = item.optString("description")
+                            .replace(Regex("<[^>]*>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
+                        kind = if (novels) "NOVEL" else "MANGA"
+                    ))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}}page, perPage: 20) {
                         pageInfo { currentPage hasNextPage }
-                        media(search: $search, type: ANIME, isAdult: false,
-                            genre_in: $genre, format: $format, status: $status,
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
+                        media(search: ${'
             val variables = JSONObject().put("page", page)
                 .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
             if (query.isNotBlank()) variables.put("search", query)
@@ -832,19 +11567,8 @@ object AniListReadingApi {
             connection.disconnect()
         }
     }
-}
-}format: MediaFormat,
-                    ${': MediaStatus, $season: MediaSeason, $year: Int, $sort: [MediaSort]) {
-                    Page(page: $page, perPage: 20) {
-                        pageInfo { currentPage hasNextPage }
-                        media(search: $search, type: ANIME, isAdult: false,
-                            genre_in: $genre, format: $format, status: $status,
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
+}}search, type: ANIME, isAdult: false,
+                            genre_in: ${'
             val variables = JSONObject().put("page", page)
                 .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
             if (query.isNotBlank()) variables.put("search", query)
@@ -1024,18 +11748,7 @@ object AniListReadingApi {
             connection.disconnect()
         }
     }
-}
-}status: MediaStatus, ${': MediaSeason, $year: Int, $sort: [MediaSort]) {
-                    Page(page: $page, perPage: 20) {
-                        pageInfo { currentPage hasNextPage }
-                        media(search: $search, type: ANIME, isAdult: false,
-                            genre_in: $genre, format: $format, status: $status,
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
+}}genre, format: ${'
             val variables = JSONObject().put("page", page)
                 .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
             if (query.isNotBlank()) variables.put("search", query)
@@ -1215,18 +11928,7 @@ object AniListReadingApi {
             connection.disconnect()
         }
     }
-}
-}season: MediaSeason, ${': Int, $sort: [MediaSort]) {
-                    Page(page: $page, perPage: 20) {
-                        pageInfo { currentPage hasNextPage }
-                        media(search: $search, type: ANIME, isAdult: false,
-                            genre_in: $genre, format: $format, status: $status,
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
+}}format, status: ${'
             val variables = JSONObject().put("page", page)
                 .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
             if (query.isNotBlank()) variables.put("search", query)
@@ -1406,18 +12108,8 @@ object AniListReadingApi {
             connection.disconnect()
         }
     }
-}
-}year: Int, ${': [MediaSort]) {
-                    Page(page: $page, perPage: 20) {
-                        pageInfo { currentPage hasNextPage }
-                        media(search: $search, type: ANIME, isAdult: false,
-                            genre_in: $genre, format: $format, status: $status,
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
+}}status,
+                            season: ${'
             val variables = JSONObject().put("page", page)
                 .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
             if (query.isNotBlank()) variables.put("search", query)
@@ -1597,18 +12289,7 @@ object AniListReadingApi {
             connection.disconnect()
         }
     }
-}
-}sort: [MediaSort]) {
-                    Page(page: ${', perPage: 20) {
-                        pageInfo { currentPage hasNextPage }
-                        media(search: $search, type: ANIME, isAdult: false,
-                            genre_in: $genre, format: $format, status: $status,
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
+}}season, seasonYear: ${'
             val variables = JSONObject().put("page", page)
                 .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
             if (query.isNotBlank()) variables.put("search", query)
@@ -1788,17 +12469,7 @@ object AniListReadingApi {
             connection.disconnect()
         }
     }
-}
-}page, perPage: 20) {
-                        pageInfo { currentPage hasNextPage }
-                        media(search: ${', type: ANIME, isAdult: false,
-                            genre_in: $genre, format: $format, status: $status,
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
+}}year, sort: ${'
             val variables = JSONObject().put("page", page)
                 .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
             if (query.isNotBlank()) variables.put("search", query)
@@ -1978,15 +12649,8 @@ object AniListReadingApi {
             connection.disconnect()
         }
     }
-}
-}search, type: ANIME, isAdult: false,
-                            genre_in: ${', format: $format, status: $status,
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
+}}sort) {
+                            ${'
             val variables = JSONObject().put("page", page)
                 .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
             if (query.isNotBlank()) variables.put("search", query)
@@ -2166,10 +12830,7 @@ object AniListReadingApi {
             connection.disconnect()
         }
     }
-}
-}genre, format: ${', status: $status,
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
+}}FIELDS
                         }
                     }
                 }
@@ -2193,1263 +12854,6 @@ object AniListReadingApi {
         val gql = """
             query ($id: Int) {
                 Media(id: $id, type: ANIME) {
-                    $FIELDS
-                }
-            }
-        """.trimIndent()
-        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
-    }
-
-    private fun request(query: String, variables: JSONObject): JSONObject {
-        val body = JSONObject().put("query", query).put("variables", variables)
-        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 18000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) {
-                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
-                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
-            }
-            val json = JSONObject(response)
-            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
-            return json
-        } finally { connection.disconnect() }
-    }
-
-    private fun parseAnime(item: JSONObject): Anime {
-        val titles = item.optJSONObject("title") ?: JSONObject()
-        val title = titles.optString("english").takeIf { it.isNotBlank() }
-            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
-        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
-        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
-        val relations = mutableListOf<AnimeRelation>()
-        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
-        for (i in 0 until edges.length()) {
-            val edge = edges.optJSONObject(i) ?: continue
-            val node = edge.optJSONObject("node") ?: continue
-            if (node.optString("type") != "ANIME") continue
-            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
-        }
-        return Anime(
-            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
-            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-            format = item.optString("format", "UNKNOWN").replace('_', ' '),
-            status = item.optString("status", "UNKNOWN").replace('_', ' '),
-            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
-            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
-            description = cleanDescription(item.optString("description")),
-            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
-            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
-            genres = item.optJSONArray("genres").toStringList(),
-            studios = studios,
-            relations = relations
-        )
-    }
-
-    private fun JSONObject.copyWithoutRelations(): JSONObject {
-        val copy = JSONObject(toString())
-        copy.remove("relations")
-        return copy
-    }
-
-    private fun JSONArray?.toStringList(): List<String> =
-        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
-
-    private fun cleanDescription(value: String): String = value
-        .replace(Regex("<[^>]*>"), "")
-        .replace("&amp;", "&").replace("&quot;", "\"")
-        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
-}
-
-data class ReadingTitle(
-    val id: Int,
-    val title: String,
-    val nativeTitle: String,
-    val cover: String,
-    val format: String,
-    val status: String,
-    val chapters: Int?,
-    val volumes: Int?,
-    val description: String,
-    val kind: String,
-    val progress: Int = 0,
-    val volumeProgress: Int = 0,
-    val readingStatus: String = "PLANNING"
-)
-
-object AniListReadingApi {
-    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
-        val gql = """
-            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
-                Page(perPage: 20) {
-                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
-                        id
-                        title { romaji english native }
-                        coverImage { large }
-                        format
-                        status
-                        chapters
-                        volumes
-                        description(asHtml: false)
-                    }
-                }
-            }
-        """.trimIndent()
-        val formats = if (novels) JSONArray().put("NOVEL")
-            else JSONArray().put("MANGA").put("ONE_SHOT")
-        val variables = JSONObject()
-            .put("formats", formats)
-            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
-        if (query.isNotBlank()) variables.put("search", query)
-        val body = JSONObject().put("query", gql).put("variables", variables)
-        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 15000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) error("AniList returned HTTP $code")
-            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
-            buildList {
-                for (i in 0 until media.length()) {
-                    val item = media.getJSONObject(i)
-                    val titles = item.optJSONObject("title") ?: JSONObject()
-                    val title = titles.optString("english").takeIf { it.isNotBlank() }
-                        ?: titles.optString("romaji").ifBlank { "Untitled" }
-                    add(ReadingTitle(
-                        id = item.optInt("id"),
-                        title = title,
-                        nativeTitle = titles.optString("native"),
-                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
-                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
-                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
-                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
-                        description = item.optString("description")
-                            .replace(Regex("<[^>]*>"), "")
-                            .replace("&amp;", "&").replace("&quot;", "\"")
-                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
-                        kind = if (novels) "NOVEL" else "MANGA"
-                    ))
-                }
-            }
-        } finally {
-            connection.disconnect()
-        }
-    }
-}
-}format, status: ${',
-                            season: $season, seasonYear: $year, sort: $sort) {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
-            val variables = JSONObject().put("page", page)
-                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
-            if (query.isNotBlank()) variables.put("search", query)
-            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
-            filters.format?.let { variables.put("format", it) }
-            filters.status?.let { variables.put("status", it) }
-            filters.season?.let { variables.put("season", it) }
-            filters.seasonYear?.let { variables.put("year", it) }
-            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
-            val info = root.getJSONObject("pageInfo")
-            val media = root.getJSONArray("media")
-            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
-                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
-        }
-
-    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
-        val gql = """
-            query ($id: Int) {
-                Media(id: $id, type: ANIME) {
-                    $FIELDS
-                }
-            }
-        """.trimIndent()
-        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
-    }
-
-    private fun request(query: String, variables: JSONObject): JSONObject {
-        val body = JSONObject().put("query", query).put("variables", variables)
-        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 18000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) {
-                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
-                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
-            }
-            val json = JSONObject(response)
-            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
-            return json
-        } finally { connection.disconnect() }
-    }
-
-    private fun parseAnime(item: JSONObject): Anime {
-        val titles = item.optJSONObject("title") ?: JSONObject()
-        val title = titles.optString("english").takeIf { it.isNotBlank() }
-            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
-        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
-        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
-        val relations = mutableListOf<AnimeRelation>()
-        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
-        for (i in 0 until edges.length()) {
-            val edge = edges.optJSONObject(i) ?: continue
-            val node = edge.optJSONObject("node") ?: continue
-            if (node.optString("type") != "ANIME") continue
-            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
-        }
-        return Anime(
-            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
-            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-            format = item.optString("format", "UNKNOWN").replace('_', ' '),
-            status = item.optString("status", "UNKNOWN").replace('_', ' '),
-            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
-            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
-            description = cleanDescription(item.optString("description")),
-            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
-            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
-            genres = item.optJSONArray("genres").toStringList(),
-            studios = studios,
-            relations = relations
-        )
-    }
-
-    private fun JSONObject.copyWithoutRelations(): JSONObject {
-        val copy = JSONObject(toString())
-        copy.remove("relations")
-        return copy
-    }
-
-    private fun JSONArray?.toStringList(): List<String> =
-        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
-
-    private fun cleanDescription(value: String): String = value
-        .replace(Regex("<[^>]*>"), "")
-        .replace("&amp;", "&").replace("&quot;", "\"")
-        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
-}
-
-data class ReadingTitle(
-    val id: Int,
-    val title: String,
-    val nativeTitle: String,
-    val cover: String,
-    val format: String,
-    val status: String,
-    val chapters: Int?,
-    val volumes: Int?,
-    val description: String,
-    val kind: String,
-    val progress: Int = 0,
-    val volumeProgress: Int = 0,
-    val readingStatus: String = "PLANNING"
-)
-
-object AniListReadingApi {
-    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
-        val gql = """
-            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
-                Page(perPage: 20) {
-                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
-                        id
-                        title { romaji english native }
-                        coverImage { large }
-                        format
-                        status
-                        chapters
-                        volumes
-                        description(asHtml: false)
-                    }
-                }
-            }
-        """.trimIndent()
-        val formats = if (novels) JSONArray().put("NOVEL")
-            else JSONArray().put("MANGA").put("ONE_SHOT")
-        val variables = JSONObject()
-            .put("formats", formats)
-            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
-        if (query.isNotBlank()) variables.put("search", query)
-        val body = JSONObject().put("query", gql).put("variables", variables)
-        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 15000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) error("AniList returned HTTP $code")
-            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
-            buildList {
-                for (i in 0 until media.length()) {
-                    val item = media.getJSONObject(i)
-                    val titles = item.optJSONObject("title") ?: JSONObject()
-                    val title = titles.optString("english").takeIf { it.isNotBlank() }
-                        ?: titles.optString("romaji").ifBlank { "Untitled" }
-                    add(ReadingTitle(
-                        id = item.optInt("id"),
-                        title = title,
-                        nativeTitle = titles.optString("native"),
-                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
-                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
-                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
-                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
-                        description = item.optString("description")
-                            .replace(Regex("<[^>]*>"), "")
-                            .replace("&amp;", "&").replace("&quot;", "\"")
-                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
-                        kind = if (novels) "NOVEL" else "MANGA"
-                    ))
-                }
-            }
-        } finally {
-            connection.disconnect()
-        }
-    }
-}
-}status,
-                            season: ${', seasonYear: $year, sort: $sort) {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
-            val variables = JSONObject().put("page", page)
-                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
-            if (query.isNotBlank()) variables.put("search", query)
-            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
-            filters.format?.let { variables.put("format", it) }
-            filters.status?.let { variables.put("status", it) }
-            filters.season?.let { variables.put("season", it) }
-            filters.seasonYear?.let { variables.put("year", it) }
-            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
-            val info = root.getJSONObject("pageInfo")
-            val media = root.getJSONArray("media")
-            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
-                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
-        }
-
-    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
-        val gql = """
-            query ($id: Int) {
-                Media(id: $id, type: ANIME) {
-                    $FIELDS
-                }
-            }
-        """.trimIndent()
-        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
-    }
-
-    private fun request(query: String, variables: JSONObject): JSONObject {
-        val body = JSONObject().put("query", query).put("variables", variables)
-        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 18000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) {
-                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
-                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
-            }
-            val json = JSONObject(response)
-            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
-            return json
-        } finally { connection.disconnect() }
-    }
-
-    private fun parseAnime(item: JSONObject): Anime {
-        val titles = item.optJSONObject("title") ?: JSONObject()
-        val title = titles.optString("english").takeIf { it.isNotBlank() }
-            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
-        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
-        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
-        val relations = mutableListOf<AnimeRelation>()
-        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
-        for (i in 0 until edges.length()) {
-            val edge = edges.optJSONObject(i) ?: continue
-            val node = edge.optJSONObject("node") ?: continue
-            if (node.optString("type") != "ANIME") continue
-            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
-        }
-        return Anime(
-            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
-            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-            format = item.optString("format", "UNKNOWN").replace('_', ' '),
-            status = item.optString("status", "UNKNOWN").replace('_', ' '),
-            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
-            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
-            description = cleanDescription(item.optString("description")),
-            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
-            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
-            genres = item.optJSONArray("genres").toStringList(),
-            studios = studios,
-            relations = relations
-        )
-    }
-
-    private fun JSONObject.copyWithoutRelations(): JSONObject {
-        val copy = JSONObject(toString())
-        copy.remove("relations")
-        return copy
-    }
-
-    private fun JSONArray?.toStringList(): List<String> =
-        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
-
-    private fun cleanDescription(value: String): String = value
-        .replace(Regex("<[^>]*>"), "")
-        .replace("&amp;", "&").replace("&quot;", "\"")
-        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
-}
-
-data class ReadingTitle(
-    val id: Int,
-    val title: String,
-    val nativeTitle: String,
-    val cover: String,
-    val format: String,
-    val status: String,
-    val chapters: Int?,
-    val volumes: Int?,
-    val description: String,
-    val kind: String,
-    val progress: Int = 0,
-    val volumeProgress: Int = 0,
-    val readingStatus: String = "PLANNING"
-)
-
-object AniListReadingApi {
-    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
-        val gql = """
-            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
-                Page(perPage: 20) {
-                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
-                        id
-                        title { romaji english native }
-                        coverImage { large }
-                        format
-                        status
-                        chapters
-                        volumes
-                        description(asHtml: false)
-                    }
-                }
-            }
-        """.trimIndent()
-        val formats = if (novels) JSONArray().put("NOVEL")
-            else JSONArray().put("MANGA").put("ONE_SHOT")
-        val variables = JSONObject()
-            .put("formats", formats)
-            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
-        if (query.isNotBlank()) variables.put("search", query)
-        val body = JSONObject().put("query", gql).put("variables", variables)
-        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 15000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) error("AniList returned HTTP $code")
-            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
-            buildList {
-                for (i in 0 until media.length()) {
-                    val item = media.getJSONObject(i)
-                    val titles = item.optJSONObject("title") ?: JSONObject()
-                    val title = titles.optString("english").takeIf { it.isNotBlank() }
-                        ?: titles.optString("romaji").ifBlank { "Untitled" }
-                    add(ReadingTitle(
-                        id = item.optInt("id"),
-                        title = title,
-                        nativeTitle = titles.optString("native"),
-                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
-                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
-                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
-                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
-                        description = item.optString("description")
-                            .replace(Regex("<[^>]*>"), "")
-                            .replace("&amp;", "&").replace("&quot;", "\"")
-                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
-                        kind = if (novels) "NOVEL" else "MANGA"
-                    ))
-                }
-            }
-        } finally {
-            connection.disconnect()
-        }
-    }
-}
-}season, seasonYear: ${', sort: $sort) {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
-            val variables = JSONObject().put("page", page)
-                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
-            if (query.isNotBlank()) variables.put("search", query)
-            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
-            filters.format?.let { variables.put("format", it) }
-            filters.status?.let { variables.put("status", it) }
-            filters.season?.let { variables.put("season", it) }
-            filters.seasonYear?.let { variables.put("year", it) }
-            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
-            val info = root.getJSONObject("pageInfo")
-            val media = root.getJSONArray("media")
-            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
-                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
-        }
-
-    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
-        val gql = """
-            query ($id: Int) {
-                Media(id: $id, type: ANIME) {
-                    $FIELDS
-                }
-            }
-        """.trimIndent()
-        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
-    }
-
-    private fun request(query: String, variables: JSONObject): JSONObject {
-        val body = JSONObject().put("query", query).put("variables", variables)
-        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 18000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) {
-                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
-                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
-            }
-            val json = JSONObject(response)
-            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
-            return json
-        } finally { connection.disconnect() }
-    }
-
-    private fun parseAnime(item: JSONObject): Anime {
-        val titles = item.optJSONObject("title") ?: JSONObject()
-        val title = titles.optString("english").takeIf { it.isNotBlank() }
-            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
-        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
-        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
-        val relations = mutableListOf<AnimeRelation>()
-        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
-        for (i in 0 until edges.length()) {
-            val edge = edges.optJSONObject(i) ?: continue
-            val node = edge.optJSONObject("node") ?: continue
-            if (node.optString("type") != "ANIME") continue
-            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
-        }
-        return Anime(
-            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
-            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-            format = item.optString("format", "UNKNOWN").replace('_', ' '),
-            status = item.optString("status", "UNKNOWN").replace('_', ' '),
-            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
-            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
-            description = cleanDescription(item.optString("description")),
-            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
-            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
-            genres = item.optJSONArray("genres").toStringList(),
-            studios = studios,
-            relations = relations
-        )
-    }
-
-    private fun JSONObject.copyWithoutRelations(): JSONObject {
-        val copy = JSONObject(toString())
-        copy.remove("relations")
-        return copy
-    }
-
-    private fun JSONArray?.toStringList(): List<String> =
-        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
-
-    private fun cleanDescription(value: String): String = value
-        .replace(Regex("<[^>]*>"), "")
-        .replace("&amp;", "&").replace("&quot;", "\"")
-        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
-}
-
-data class ReadingTitle(
-    val id: Int,
-    val title: String,
-    val nativeTitle: String,
-    val cover: String,
-    val format: String,
-    val status: String,
-    val chapters: Int?,
-    val volumes: Int?,
-    val description: String,
-    val kind: String,
-    val progress: Int = 0,
-    val volumeProgress: Int = 0,
-    val readingStatus: String = "PLANNING"
-)
-
-object AniListReadingApi {
-    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
-        val gql = """
-            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
-                Page(perPage: 20) {
-                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
-                        id
-                        title { romaji english native }
-                        coverImage { large }
-                        format
-                        status
-                        chapters
-                        volumes
-                        description(asHtml: false)
-                    }
-                }
-            }
-        """.trimIndent()
-        val formats = if (novels) JSONArray().put("NOVEL")
-            else JSONArray().put("MANGA").put("ONE_SHOT")
-        val variables = JSONObject()
-            .put("formats", formats)
-            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
-        if (query.isNotBlank()) variables.put("search", query)
-        val body = JSONObject().put("query", gql).put("variables", variables)
-        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 15000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) error("AniList returned HTTP $code")
-            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
-            buildList {
-                for (i in 0 until media.length()) {
-                    val item = media.getJSONObject(i)
-                    val titles = item.optJSONObject("title") ?: JSONObject()
-                    val title = titles.optString("english").takeIf { it.isNotBlank() }
-                        ?: titles.optString("romaji").ifBlank { "Untitled" }
-                    add(ReadingTitle(
-                        id = item.optInt("id"),
-                        title = title,
-                        nativeTitle = titles.optString("native"),
-                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
-                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
-                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
-                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
-                        description = item.optString("description")
-                            .replace(Regex("<[^>]*>"), "")
-                            .replace("&amp;", "&").replace("&quot;", "\"")
-                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
-                        kind = if (novels) "NOVEL" else "MANGA"
-                    ))
-                }
-            }
-        } finally {
-            connection.disconnect()
-        }
-    }
-}
-}year, sort: ${') {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
-            val variables = JSONObject().put("page", page)
-                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
-            if (query.isNotBlank()) variables.put("search", query)
-            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
-            filters.format?.let { variables.put("format", it) }
-            filters.status?.let { variables.put("status", it) }
-            filters.season?.let { variables.put("season", it) }
-            filters.seasonYear?.let { variables.put("year", it) }
-            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
-            val info = root.getJSONObject("pageInfo")
-            val media = root.getJSONArray("media")
-            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
-                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
-        }
-
-    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
-        val gql = """
-            query ($id: Int) {
-                Media(id: $id, type: ANIME) {
-                    $FIELDS
-                }
-            }
-        """.trimIndent()
-        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
-    }
-
-    private fun request(query: String, variables: JSONObject): JSONObject {
-        val body = JSONObject().put("query", query).put("variables", variables)
-        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 18000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) {
-                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
-                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
-            }
-            val json = JSONObject(response)
-            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
-            return json
-        } finally { connection.disconnect() }
-    }
-
-    private fun parseAnime(item: JSONObject): Anime {
-        val titles = item.optJSONObject("title") ?: JSONObject()
-        val title = titles.optString("english").takeIf { it.isNotBlank() }
-            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
-        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
-        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
-        val relations = mutableListOf<AnimeRelation>()
-        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
-        for (i in 0 until edges.length()) {
-            val edge = edges.optJSONObject(i) ?: continue
-            val node = edge.optJSONObject("node") ?: continue
-            if (node.optString("type") != "ANIME") continue
-            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
-        }
-        return Anime(
-            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
-            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-            format = item.optString("format", "UNKNOWN").replace('_', ' '),
-            status = item.optString("status", "UNKNOWN").replace('_', ' '),
-            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
-            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
-            description = cleanDescription(item.optString("description")),
-            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
-            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
-            genres = item.optJSONArray("genres").toStringList(),
-            studios = studios,
-            relations = relations
-        )
-    }
-
-    private fun JSONObject.copyWithoutRelations(): JSONObject {
-        val copy = JSONObject(toString())
-        copy.remove("relations")
-        return copy
-    }
-
-    private fun JSONArray?.toStringList(): List<String> =
-        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
-
-    private fun cleanDescription(value: String): String = value
-        .replace(Regex("<[^>]*>"), "")
-        .replace("&amp;", "&").replace("&quot;", "\"")
-        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
-}
-
-data class ReadingTitle(
-    val id: Int,
-    val title: String,
-    val nativeTitle: String,
-    val cover: String,
-    val format: String,
-    val status: String,
-    val chapters: Int?,
-    val volumes: Int?,
-    val description: String,
-    val kind: String,
-    val progress: Int = 0,
-    val volumeProgress: Int = 0,
-    val readingStatus: String = "PLANNING"
-)
-
-object AniListReadingApi {
-    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
-        val gql = """
-            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
-                Page(perPage: 20) {
-                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
-                        id
-                        title { romaji english native }
-                        coverImage { large }
-                        format
-                        status
-                        chapters
-                        volumes
-                        description(asHtml: false)
-                    }
-                }
-            }
-        """.trimIndent()
-        val formats = if (novels) JSONArray().put("NOVEL")
-            else JSONArray().put("MANGA").put("ONE_SHOT")
-        val variables = JSONObject()
-            .put("formats", formats)
-            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
-        if (query.isNotBlank()) variables.put("search", query)
-        val body = JSONObject().put("query", gql).put("variables", variables)
-        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 15000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) error("AniList returned HTTP $code")
-            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
-            buildList {
-                for (i in 0 until media.length()) {
-                    val item = media.getJSONObject(i)
-                    val titles = item.optJSONObject("title") ?: JSONObject()
-                    val title = titles.optString("english").takeIf { it.isNotBlank() }
-                        ?: titles.optString("romaji").ifBlank { "Untitled" }
-                    add(ReadingTitle(
-                        id = item.optInt("id"),
-                        title = title,
-                        nativeTitle = titles.optString("native"),
-                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
-                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
-                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
-                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
-                        description = item.optString("description")
-                            .replace(Regex("<[^>]*>"), "")
-                            .replace("&amp;", "&").replace("&quot;", "\"")
-                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
-                        kind = if (novels) "NOVEL" else "MANGA"
-                    ))
-                }
-            }
-        } finally {
-            connection.disconnect()
-        }
-    }
-}
-}sort) {
-                            $FIELDS
-                        }
-                    }
-                }
-            """.trimIndent()
-            val variables = JSONObject().put("page", page)
-                .put("sort", JSONArray().put(filters.sort ?: if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
-            if (query.isNotBlank()) variables.put("search", query)
-            filters.genre?.let { variables.put("genre", JSONArray().put(it)) }
-            filters.format?.let { variables.put("format", it) }
-            filters.status?.let { variables.put("status", it) }
-            filters.season?.let { variables.put("season", it) }
-            filters.seasonYear?.let { variables.put("year", it) }
-            val root = request(gql, variables).getJSONObject("data").getJSONObject("Page")
-            val info = root.getJSONObject("pageInfo")
-            val media = root.getJSONArray("media")
-            AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
-                info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
-        }
-
-    suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
-        val gql = """
-            query (${': Int) {
-                Media(id: $id, type: ANIME) {
-                    $FIELDS
-                }
-            }
-        """.trimIndent()
-        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
-    }
-
-    private fun request(query: String, variables: JSONObject): JSONObject {
-        val body = JSONObject().put("query", query).put("variables", variables)
-        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 18000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) {
-                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
-                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
-            }
-            val json = JSONObject(response)
-            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
-            return json
-        } finally { connection.disconnect() }
-    }
-
-    private fun parseAnime(item: JSONObject): Anime {
-        val titles = item.optJSONObject("title") ?: JSONObject()
-        val title = titles.optString("english").takeIf { it.isNotBlank() }
-            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
-        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
-        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
-        val relations = mutableListOf<AnimeRelation>()
-        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
-        for (i in 0 until edges.length()) {
-            val edge = edges.optJSONObject(i) ?: continue
-            val node = edge.optJSONObject("node") ?: continue
-            if (node.optString("type") != "ANIME") continue
-            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
-        }
-        return Anime(
-            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
-            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-            format = item.optString("format", "UNKNOWN").replace('_', ' '),
-            status = item.optString("status", "UNKNOWN").replace('_', ' '),
-            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
-            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
-            description = cleanDescription(item.optString("description")),
-            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
-            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
-            genres = item.optJSONArray("genres").toStringList(),
-            studios = studios,
-            relations = relations
-        )
-    }
-
-    private fun JSONObject.copyWithoutRelations(): JSONObject {
-        val copy = JSONObject(toString())
-        copy.remove("relations")
-        return copy
-    }
-
-    private fun JSONArray?.toStringList(): List<String> =
-        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
-
-    private fun cleanDescription(value: String): String = value
-        .replace(Regex("<[^>]*>"), "")
-        .replace("&amp;", "&").replace("&quot;", "\"")
-        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
-}
-
-data class ReadingTitle(
-    val id: Int,
-    val title: String,
-    val nativeTitle: String,
-    val cover: String,
-    val format: String,
-    val status: String,
-    val chapters: Int?,
-    val volumes: Int?,
-    val description: String,
-    val kind: String,
-    val progress: Int = 0,
-    val volumeProgress: Int = 0,
-    val readingStatus: String = "PLANNING"
-)
-
-object AniListReadingApi {
-    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
-        val gql = """
-            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
-                Page(perPage: 20) {
-                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
-                        id
-                        title { romaji english native }
-                        coverImage { large }
-                        format
-                        status
-                        chapters
-                        volumes
-                        description(asHtml: false)
-                    }
-                }
-            }
-        """.trimIndent()
-        val formats = if (novels) JSONArray().put("NOVEL")
-            else JSONArray().put("MANGA").put("ONE_SHOT")
-        val variables = JSONObject()
-            .put("formats", formats)
-            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
-        if (query.isNotBlank()) variables.put("search", query)
-        val body = JSONObject().put("query", gql).put("variables", variables)
-        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 15000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) error("AniList returned HTTP $code")
-            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
-            buildList {
-                for (i in 0 until media.length()) {
-                    val item = media.getJSONObject(i)
-                    val titles = item.optJSONObject("title") ?: JSONObject()
-                    val title = titles.optString("english").takeIf { it.isNotBlank() }
-                        ?: titles.optString("romaji").ifBlank { "Untitled" }
-                    add(ReadingTitle(
-                        id = item.optInt("id"),
-                        title = title,
-                        nativeTitle = titles.optString("native"),
-                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
-                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
-                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
-                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
-                        description = item.optString("description")
-                            .replace(Regex("<[^>]*>"), "")
-                            .replace("&amp;", "&").replace("&quot;", "\"")
-                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
-                        kind = if (novels) "NOVEL" else "MANGA"
-                    ))
-                }
-            }
-        } finally {
-            connection.disconnect()
-        }
-    }
-}
-}id: Int) {
-                Media(id: ${', type: ANIME) {
-                    $FIELDS
-                }
-            }
-        """.trimIndent()
-        parseAnime(request(gql, JSONObject().put("id", id)).getJSONObject("data").getJSONObject("Media"))
-    }
-
-    private fun request(query: String, variables: JSONObject): JSONObject {
-        val body = JSONObject().put("query", query).put("variables", variables)
-        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 18000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) {
-                val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
-                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
-            }
-            val json = JSONObject(response)
-            if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
-            return json
-        } finally { connection.disconnect() }
-    }
-
-    private fun parseAnime(item: JSONObject): Anime {
-        val titles = item.optJSONObject("title") ?: JSONObject()
-        val title = titles.optString("english").takeIf { it.isNotBlank() }
-            ?: titles.optString("romaji").ifBlank { "Untitled anime" }
-        val studioNodes = item.optJSONObject("studios")?.optJSONArray("nodes") ?: JSONArray()
-        val studios = (0 until studioNodes.length()).mapNotNull { studioNodes.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
-        val relations = mutableListOf<AnimeRelation>()
-        val edges = item.optJSONObject("relations")?.optJSONArray("edges") ?: JSONArray()
-        for (i in 0 until edges.length()) {
-            val edge = edges.optJSONObject(i) ?: continue
-            val node = edge.optJSONObject("node") ?: continue
-            if (node.optString("type") != "ANIME") continue
-            relations += AnimeRelation(edge.optString("relationType"), parseAnime(node.copyWithoutRelations()))
-        }
-        return Anime(
-            id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
-            cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-            format = item.optString("format", "UNKNOWN").replace('_', ' '),
-            status = item.optString("status", "UNKNOWN").replace('_', ' '),
-            episodes = item.optInt("episodes").takeIf { !item.isNull("episodes") && it > 0 },
-            score = item.optInt("averageScore").takeIf { !item.isNull("averageScore") && it > 0 },
-            description = cleanDescription(item.optString("description")),
-            season = item.optString("season").takeIf { it != "null" }.orEmpty(),
-            seasonYear = item.optInt("seasonYear").takeIf { !item.isNull("seasonYear") && it > 0 },
-            genres = item.optJSONArray("genres").toStringList(),
-            studios = studios,
-            relations = relations
-        )
-    }
-
-    private fun JSONObject.copyWithoutRelations(): JSONObject {
-        val copy = JSONObject(toString())
-        copy.remove("relations")
-        return copy
-    }
-
-    private fun JSONArray?.toStringList(): List<String> =
-        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
-
-    private fun cleanDescription(value: String): String = value
-        .replace(Regex("<[^>]*>"), "")
-        .replace("&amp;", "&").replace("&quot;", "\"")
-        .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">")
-}
-
-data class ReadingTitle(
-    val id: Int,
-    val title: String,
-    val nativeTitle: String,
-    val cover: String,
-    val format: String,
-    val status: String,
-    val chapters: Int?,
-    val volumes: Int?,
-    val description: String,
-    val kind: String,
-    val progress: Int = 0,
-    val volumeProgress: Int = 0,
-    val readingStatus: String = "PLANNING"
-)
-
-object AniListReadingApi {
-    suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
-        val gql = """
-            query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
-                Page(perPage: 20) {
-                    media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
-                        id
-                        title { romaji english native }
-                        coverImage { large }
-                        format
-                        status
-                        chapters
-                        volumes
-                        description(asHtml: false)
-                    }
-                }
-            }
-        """.trimIndent()
-        val formats = if (novels) JSONArray().put("NOVEL")
-            else JSONArray().put("MANGA").put("ONE_SHOT")
-        val variables = JSONObject()
-            .put("formats", formats)
-            .put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
-        if (query.isNotBlank()) variables.put("search", query)
-        val body = JSONObject().put("query", gql).put("variables", variables)
-        val connection = (URL("https://graphql.anilist.co").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12000
-            readTimeout = 15000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream.bufferedReader().use { it.readText() }
-            if (code !in 200..299) error("AniList returned HTTP $code")
-            val media = JSONObject(response).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
-            buildList {
-                for (i in 0 until media.length()) {
-                    val item = media.getJSONObject(i)
-                    val titles = item.optJSONObject("title") ?: JSONObject()
-                    val title = titles.optString("english").takeIf { it.isNotBlank() }
-                        ?: titles.optString("romaji").ifBlank { "Untitled" }
-                    add(ReadingTitle(
-                        id = item.optInt("id"),
-                        title = title,
-                        nativeTitle = titles.optString("native"),
-                        cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
-                        format = item.optString("format", "UNKNOWN").replace('_', ' '),
-                        status = item.optString("status", "UNKNOWN").replace('_', ' '),
-                        chapters = item.optInt("chapters").takeIf { !item.isNull("chapters") && it > 0 },
-                        volumes = item.optInt("volumes").takeIf { !item.isNull("volumes") && it > 0 },
-                        description = item.optString("description")
-                            .replace(Regex("<[^>]*>"), "")
-                            .replace("&amp;", "&").replace("&quot;", "\"")
-                            .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
-                        kind = if (novels) "NOVEL" else "MANGA"
-                    ))
-                }
-            }
-        } finally {
-            connection.disconnect()
-        }
-    }
-}
-}id, type: ANIME) {
                     $FIELDS
                 }
             }
