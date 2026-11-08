@@ -90,9 +90,13 @@ Streaming links are bookmarks/launch points; they are not downloaded or re-hoste
 
 ## 1.0.0 — Official Release (development)
 
-- Home dashboard refresh: visible Continue Watching empty state, active Watching titles, collection counts, and recently completed titles.
-- Continue Watching entries open the Library so episode progress can be updated.
-- Planned remaining work: consistent UI polish, franchise relationship cleanup, offline/error handling, backup reliability, profile and dashboard customization, accessibility, privacy review, and final device testing.
+- Home dashboard refresh with Continue Watching, collection snapshots, recently completed titles, and quick navigation.
+- Redesigned Library with title search, status filters, collection counters, progress bars, and clearer episode controls.
+- Discover filters are horizontally scrollable on narrow screens.
+- Expanded Statistics with watch-status distribution, estimated viewing time, reading totals, and top genres from saved catalog metadata.
+- Profile achievement showcase and five persistent accent-color themes, alongside customizable name, bio, avatar, favorites, and banner.
+- Local audio now uses asynchronous preparation, clearer playback errors, and a next-track queue with previous/next controls.
+- Remaining release checks: device validation of audio playback, background playback/notification controls, end-to-end navigation and screen-size testing, data/backup review, accessibility, privacy review, and final Claude code review.
 
 ## Known issues carried into 1.0.0
 
