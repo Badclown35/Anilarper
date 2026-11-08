@@ -52,6 +52,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import app.anilarper.personal.theme.*
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
