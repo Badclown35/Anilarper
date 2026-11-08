@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.media.MediaPlayer
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -930,6 +932,18 @@ private fun ReadingScreen(
 @Composable
 private fun MusicScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    val focusRequest = remember {
+        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+            .setOnAudioFocusChangeListener { change ->
+                if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+                    runCatching { player?.pause() }
+                    playing = false
+                }
+            }.build()
+    }
     var shuffle by remember { mutableStateOf(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getBoolean("musicShuffle", false)) }
     var savedTracks by remember { mutableStateOf(loadTracks(context)) }
     var tracks by remember { mutableStateOf(savedTracks.let { if (shuffle) it.shuffled() else it }) }
@@ -960,10 +974,15 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
             next.setDataSource(context, Uri.parse(track.uri))
             next.setOnPreparedListener { prepared ->
                 if (player === prepared) {
+                    if (audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                        prepared.start()
+                        playing = true
+                        message = null
+                    } else {
+                        playing = false
+                        message = "Couldn't get audio focus."
+                    }
                     preparing = false
-                    prepared.start()
-                    playing = true
-                    message = null
                 }
             }
             next.setOnCompletionListener { completed ->
@@ -976,13 +995,14 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
                     if (queuedNext != null) startTrack(queuedNext) else playing = false
                 }
             }
-            next.setOnErrorListener { failed, _, _ ->
+            next.setOnErrorListener { failed, what, extra ->
                 if (player === failed) {
                     preparing = false
                     playing = false
                     player = null
-                    message = "This audio file couldn't be played. Try another file format or re-add the file."
+                    message = "This audio file couldn't be played (code $what/$extra). Try another format or re-add it."
                 }
+                runCatching { failed.release() }
                 true
             }
             player = next
@@ -990,9 +1010,9 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
             message = "Preparing audio…"
             next.prepareAsync()
         }.onFailure {
+            runCatching { player?.release() }
             preparing = false
             playing = false
-            player?.release()
             player = null
             message = it.message ?: "Unable to open this audio file."
         }
@@ -1019,7 +1039,10 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
         }
     }
     val playerRef by rememberUpdatedState(player)
-    DisposableEffect(Unit) { onDispose { playerRef?.release() } }
+    DisposableEffect(Unit) { onDispose {
+        playerRef?.release()
+        audioManager.abandonAudioFocusRequest(focusRequest)
+    } }
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(18.dp))
         Text("ANILARPER AUDIO", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
