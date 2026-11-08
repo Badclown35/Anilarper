@@ -442,7 +442,7 @@ private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, on
             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Violet,
                 unfocusedBorderColor = Panel2, focusedTextColor = White,
                 unfocusedTextColor = White, cursorColor = Violet))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 7.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 7.dp)) {
             val filters = listOf(
                 Triple("Genre", genre ?: "Genre", listOf("Action","Adventure","Comedy","Drama","Fantasy","Horror","Mystery","Romance","Sci-Fi","Slice of Life","Sports","Supernatural","Thriller")),
                 Triple("Format", format?.replace('_',' ') ?: "Format", listOf("TV","TV_SHORT","MOVIE","SPECIAL","OVA","ONA")),
@@ -1380,39 +1380,79 @@ private fun StatisticsScreen(library: List<Anime>, readingLibrary: List<ReadingT
     val completed = library.count { it.watchStatus == "COMPLETED" }
     val watching = library.count { it.watchStatus == "WATCHING" }
     val planning = library.count { it.watchStatus == "PLANNING" }
+    val paused = library.count { it.watchStatus == "PAUSED" }
+    val dropped = library.count { it.watchStatus == "DROPPED" }
     val episodes = library.sumOf { it.progress }
     val estimatedHours = episodes * 24 / 60
     val manga = readingLibrary.count { it.kind != "NOVEL" }
     val novels = readingLibrary.count { it.kind == "NOVEL" }
+    val genreCounts = library.flatMap { it.genres }.groupingBy { it }.eachCount()
+        .entries.sortedByDescending { it.value }.take(5)
+    val total = library.size.coerceAtLeast(1)
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(13.dp)) {
-        Spacer(Modifier.height(8.dp))
-        Text("YOUR ACTIVITY", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Text("Collection statistics", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-        Text("A snapshot of the progress saved on this device.", color = Muted, fontSize = 12.sp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Spacer(Modifier.height(7.dp))
+        Text("YOUR ACTIVITY", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        Text("Your statistics", color = White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+        Text("A clearer picture of the stories you've followed.", color = Muted, fontSize = 12.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            ProfileStat("Anime saved", library.size.toString(), Modifier.weight(1f))
-            ProfileStat("Episodes", episodes.toString(), Modifier.weight(1f))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            ProfileStat("Completed", completed.toString(), Modifier.weight(1f))
-            ProfileStat("Watching", watching.toString(), Modifier.weight(1f))
+            DashboardStat("ANIME SAVED", library.size.toString(), Icons.Default.Bookmarks, Modifier.weight(1f))
+            DashboardStat("EPISODES", episodes.toString(), Icons.Default.PlayCircle, Modifier.weight(1f))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            ProfileStat("Planning", planning.toString(), Modifier.weight(1f))
-            ProfileStat("Est. watch time", if (estimatedHours < 1) "<1 hr" else "$estimatedHours hrs", Modifier.weight(1f))
+            DashboardStat("COMPLETED", completed.toString(), Icons.Default.CheckCircle, Modifier.weight(1f))
+            DashboardStat("EST. HOURS", if (estimatedHours < 1) "<1" else estimatedHours.toString(), Icons.Default.Schedule, Modifier.weight(1f))
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            ProfileStat("Manga", manga.toString(), Modifier.weight(1f))
-            ProfileStat("Light novels", novels.toString(), Modifier.weight(1f))
+        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(11.dp)) {
+            Text("WATCH STATUS", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+            val statuses = listOf(
+                Triple("Watching", watching, Violet),
+                Triple("Completed", completed, Color(0xFF77CFA5)),
+                Triple("Planning", planning, Color(0xFF8EA8E8)),
+                Triple("Paused", paused, Color(0xFFE0B66D)),
+                Triple("Dropped", dropped, Color(0xFFB17C91))
+            )
+            statuses.forEach { (label, count, color) ->
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(label, color = White, fontSize = 12.sp)
+                        Spacer(Modifier.weight(1f))
+                        Text("$count", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    LinearProgressIndicator(
+                        progress = { (count.toFloat() / total).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth().height(5.dp),
+                        color = color, trackColor = Panel2
+                    )
+                }
+            }
         }
-        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(15.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("PROGRESS OVERVIEW", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            Text(if (library.isEmpty() && readingLibrary.isEmpty()) "Add titles to your library to start building your statistics."
-                else "You have saved ${library.size} anime and ${readingLibrary.size} reading titles. Your progress is stored locally.",
-                color = White, fontSize = 12.sp)
+        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("YOUR READING SHELF", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                DashboardStat("MANGA", manga.toString(), Icons.Default.MenuBook, Modifier.weight(1f))
+                DashboardStat("LIGHT NOVELS", novels.toString(), Icons.Default.AutoStories, Modifier.weight(1f))
+            }
+            Text("$\{readingLibrary.sumOf { it.progress }} chapters tracked • $\{readingLibrary.sumOf { it.volumeProgress }} volumes tracked",
+                color = Muted, fontSize = 11.sp)
         }
+        if (genreCounts.isNotEmpty()) {
+            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("MOST-COLLECTED GENRES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                genreCounts.forEach { (genre, count) ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(genre, color = White, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Text("$count $\{if (count == 1) "title" else "titles"}", color = Muted, fontSize = 10.sp)
+                    }
+                }
+            }
+        }
+        Text("Watch time is an estimate based on 24 minutes per episode. Statistics use only data saved on this device.",
+            color = Muted, fontSize = 10.sp)
+        Spacer(Modifier.height(10.dp))
     }
 }
 
