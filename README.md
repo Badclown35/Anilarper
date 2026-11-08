@@ -2,7 +2,7 @@
 
 A personal, native Android anime, manga, light-novel, and soundtrack companion built around rediscovery, tracking, and low-pressure exploration.
 
-## Current build: 0.4.0
+## Current build: 0.5.0
 
 - Kotlin + Jetpack Compose; modern dark interface with violet accents
 - Home, Discover, Library, Read, Music, Quests, and Profile sections
@@ -45,3 +45,14 @@ Or open **Actions → Build Anilarper APK** and download the `Anilarper-debug` a
 9. UI polish, accessibility, and device testing
 
 Design references are used for general UX patterns only. Anilarper uses its own interface and does not copy proprietary source code, branding, or artwork.
+
+
+## 0.5.0 — Personalization Update
+
+- Customizable local profile: display name, bio, avatar image URL, favorite titles, and banner style.
+- Personal collection stats for saved anime, completed anime, and reading titles.
+- Optional milestone quests with progress derived from your library and reading shelf.
+- Claimable XP rewards saved locally on the device.
+- No streaks, daily deadlines, or penalties for taking breaks.
+
+Profile settings and quest progress are stored locally. Avatar images are loaded from the URL you provide.
