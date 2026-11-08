@@ -60,12 +60,6 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import app.anilarper.personal.*
-import app.anilarper.personal.LocalTrack
-import app.anilarper.personal.MusicLink
-import app.anilarper.personal.loadTracks
-import app.anilarper.personal.persistTracks
-import app.anilarper.personal.loadMusicLinks
-import app.anilarper.personal.persistMusicLinks
 
 @Composable
 fun MusicScreen(modifier: Modifier = Modifier) {
@@ -337,4 +331,41 @@ fun MusicScreen(modifier: Modifier = Modifier) {
             dismissButton = { TextButton(onClick = { showLinkDialog = false }) { Text("Cancel", color = Muted) } }
         )
     }
+}
+
+private data class LocalTrack(val uri: String, val title: String)
+private data class MusicLink(val title: String, val url: String, val source: String)
+
+private fun <T> JSONArray.mapSafe(block: (JSONObject) -> T): List<T> =
+    (0 until length()).mapNotNull { index -> runCatching { block(getJSONObject(index)) }.getOrNull() }
+
+private fun readJsonArray(context: Context, key: String): JSONArray? {
+    val prefs = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE)
+    val raw = prefs.getString(key, "[]") ?: "[]"
+    return runCatching { JSONArray(raw) }.getOrElse {
+        prefs.edit().putString("${key}_corrupt_backup", raw).apply()
+        null
+    }
+}
+
+private fun loadTracks(context: Context): List<LocalTrack> =
+    readJsonArray(context, "tracks")?.mapSafe { item ->
+        LocalTrack(item.getString("uri"), item.optString("title", "Audio track").ifBlank { "Audio track" })
+    } ?: emptyList()
+
+private fun persistTracks(context: Context, tracks: List<LocalTrack>) {
+    val array = JSONArray()
+    tracks.forEach { array.put(JSONObject().put("uri", it.uri).put("title", it.title)) }
+    context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putString("tracks", array.toString()).apply()
+}
+
+private fun loadMusicLinks(context: Context): List<MusicLink> =
+    readJsonArray(context, "musicLinks")?.mapSafe { o ->
+        MusicLink(o.getString("title"), o.getString("url"), o.getString("source"))
+    } ?: emptyList()
+
+private fun persistMusicLinks(context: Context, links: List<MusicLink>) {
+    val array = JSONArray()
+    links.forEach { array.put(JSONObject().put("title", it.title).put("url", it.url).put("source", it.source)) }
+    context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putString("musicLinks", array.toString()).apply()
 }
