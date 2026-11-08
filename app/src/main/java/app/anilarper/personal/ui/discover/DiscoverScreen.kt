@@ -72,7 +72,6 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, onToggleSa
     var loading by remember { mutableStateOf(true) }
     var loadingMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var selectedAnimeId by rememberSaveable { mutableIntStateOf(-1) }
     var selectedAnime by remember { mutableStateOf<Anime?>(null) }
     var detail by remember { mutableStateOf<Anime?>(null) }
     var detailLoading by remember { mutableStateOf(false) }
