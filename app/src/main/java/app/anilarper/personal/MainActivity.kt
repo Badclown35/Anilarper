@@ -754,7 +754,11 @@ private fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, o
                             Text("EPISODES WATCHED", color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
                             Spacer(Modifier.weight(1f))
                             IconButton(
-                                onClick = { onUpdate(anime.copy(progress = (anime.progress - 1).coerceAtLeast(0))) },
+                                onClick = {
+                                    val newProgress = (anime.progress - 1).coerceAtLeast(0)
+                                    val newStatus = if (anime.watchStatus == "COMPLETED" && anime.episodes != null && newProgress < anime.episodes) "WATCHING" else anime.watchStatus
+                                    onUpdate(anime.copy(progress = newProgress, watchStatus = newStatus, lastWatchedAt = System.currentTimeMillis()))
+                                },
                                 enabled = anime.progress > 0
                             ) { Icon(Icons.Default.RemoveCircleOutline, contentDescription = "Decrease episode", tint = Violet) }
                             Text(anime.progress.toString(), color = White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
@@ -783,7 +787,8 @@ private fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, o
                                         text = { Text(status.replace('_', ' ')) },
                                         onClick = {
                                             statusExpanded = false
-                                            onUpdate(anime.copy(watchStatus = status))
+                                            val fill = if (status == "COMPLETED" && anime.episodes != null) anime.episodes else anime.progress
+                                            onUpdate(anime.copy(watchStatus = status, progress = fill, lastWatchedAt = System.currentTimeMillis()))
                                         }
                                     )
                                 }
