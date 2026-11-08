@@ -2,14 +2,17 @@
 
 A personal, native Android anime and manga companion designed around rediscovery, tracking, and low-pressure exploration.
 
-## Current build: 0.2.0
+## Current build: 0.3.0
 
 - Kotlin + Jetpack Compose
 - Modern dark interface with Home, Discover, Library, Quests, and Profile navigation
 - Live anime trending and title search through the AniList GraphQL API
 - Anime quick-view details, cover art, format, episode count, score, and synopsis
 - Save/remove titles in a personal library
-- Saved library persists locally on the device
+- Track episodes watched for each saved anime
+- Update watch status: Planning, Watching, Completed, Paused, or Dropped
+- Progress bars and completed-title count in the library
+- Saved titles, watch status, and episode progress persist locally on the device
 - Discovery excludes entries marked as adult by AniList
 - Android API 26+; Java 17; compile/target SDK 35
 - GitHub Actions workflow builds and uploads a debug APK
@@ -29,8 +32,8 @@ Or open **Actions → Build Anilarper APK** and download the `Anilarper-debug` a
 
 ## Next milestones
 
-1. Manga catalog and tracking
-2. Episode/chapter progress, statuses, ratings, and custom lists
+1. Manga catalog and chapter tracking
+2. Ratings, custom lists, and richer title details
 3. Room database migration and backup/export
 4. Optional MyAnimeList export ZIP import
 5. Revival mode and recommendations based on the user's own preferences
