@@ -24,7 +24,7 @@ data class Anime(
 object AniListApi {
     suspend fun search(query: String): List<Anime> = withContext(Dispatchers.IO) {
         val gql = """
-            query (${'$'}search: String, ${'$'}sort: [MediaSort]) {
+                        query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
                 Page(perPage: 20) {
                     media(search: ${'$'}search, type: ANIME, isAdult: false, sort: ${'$'}sort) {
                         id
@@ -111,7 +111,7 @@ object AniListReadingApi {
         val gql = """
             query (${': String, ${': [MediaFormat], ${': [MediaSort]) {
                 Page(perPage: 20) {
-                    media(search: $search, type: MANGA, format_in: $formats, isAdult: false, sort: $sort) {
+                                        media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
                         id
                         title { romaji english native }
                         coverImage { large }
