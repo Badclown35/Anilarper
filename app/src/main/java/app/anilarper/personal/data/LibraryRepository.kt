@@ -3,6 +3,8 @@ package app.anilarper.personal.data
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import androidx.room.withTransaction
+import kotlinx.coroutines.flow.map
 import app.anilarper.personal.Anime
 import app.anilarper.personal.ReadingTitle
 
@@ -14,6 +16,79 @@ import app.anilarper.personal.ReadingTitle
 class LibraryRepository(context: Context) {
     private val preferences = context.applicationContext
         .getSharedPreferences("anilarper", Context.MODE_PRIVATE)
+
+    private val database = AnilarperDatabase.get(context.applicationContext)
+    private val roomDao = database.collectionDao()
+
+    fun observeAnime(): kotlinx.coroutines.flow.Flow<List<Anime>> =
+        roomDao.observeCollection("anime").map { rows ->
+            rows.mapNotNull { row -> runCatching { parseAnime(JSONObject(row.payload)) }.getOrNull() }
+        }
+
+    fun observeReading(): kotlinx.coroutines.flow.Flow<List<ReadingTitle>> =
+        roomDao.observeCollection("reading").map { rows ->
+            rows.mapNotNull { row -> runCatching { parseReading(JSONObject(row.payload)) }.getOrNull() }
+        }
+
+    suspend fun saveAnimeToRoom(items: List<Anime>) {
+        database.withTransaction {
+            roomDao.clearCollection("anime")
+            roomDao.insertAll(items.mapIndexed { index, anime ->
+                val payload = anime.toJson()
+                CollectionEntity(anime.id.toString(), "anime", anime.id, "ANIME", index, payload.toString())
+            })
+        }
+    }
+
+    suspend fun saveReadingToRoom(items: List<ReadingTitle>) {
+        database.withTransaction {
+            roomDao.clearCollection("reading")
+            roomDao.insertAll(items.mapIndexed { index, item ->
+                val payload = item.toJson()
+                CollectionEntity("${item.kind}:${item.id}", "reading", item.id, item.kind, index, payload.toString())
+            })
+        }
+    }
+
+    suspend fun reloadRoomFromPreferences() {
+        saveAnimeToRoom(loadAnime())
+        saveReadingToRoom(loadReading())
+    }
+
+    private fun parseAnime(o: JSONObject) = Anime(
+        o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
+        o.optString("format"), o.optString("status"),
+        if (o.isNull("episodes")) null else o.optInt("episodes"),
+        if (o.isNull("score")) null else o.optInt("score"), o.optString("description"),
+        o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0), o.optLong("lastWatchedAt", 0L),
+        o.optString("season"),
+        if (!o.has("seasonYear") || o.isNull("seasonYear")) null else o.optInt("seasonYear"),
+        o.optJSONArray("genres").toStrings(), o.optJSONArray("studios").toStrings()
+    )
+
+    private fun parseReading(o: JSONObject) = ReadingTitle(
+        o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
+        o.optString("format"), o.optString("status"),
+        if (o.isNull("chapters")) null else o.optInt("chapters"),
+        if (o.isNull("volumes")) null else o.optInt("volumes"), o.optString("description"),
+        o.optString("kind", "MANGA"), o.optInt("progress"), o.optInt("volumeProgress"),
+        o.optString("readingStatus", "PLANNING")
+    )
+
+    private fun Anime.toJson() = JSONObject()
+        .put("id", id).put("title", title).put("nativeTitle", nativeTitle)
+        .put("cover", cover).put("format", format).put("status", status)
+        .put("episodes", episodes).put("score", score).put("description", description)
+        .put("watchStatus", watchStatus).put("progress", progress).put("lastWatchedAt", lastWatchedAt)
+        .put("season", season).put("seasonYear", seasonYear)
+        .put("genres", JSONArray(genres)).put("studios", JSONArray(studios))
+
+    private fun ReadingTitle.toJson() = JSONObject()
+        .put("id", id).put("title", title).put("nativeTitle", nativeTitle)
+        .put("cover", cover).put("format", format).put("status", status)
+        .put("chapters", chapters).put("volumes", volumes).put("description", description)
+        .put("kind", kind).put("progress", progress).put("volumeProgress", volumeProgress)
+        .put("readingStatus", readingStatus)
 
     fun loadAnime(): List<Anime> = readArray("library")?.mapNotNull { o ->
         runCatching {
