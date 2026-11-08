@@ -68,7 +68,6 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
                     try {
                         val candidates = AniListApi.search(row.title, 1, AnimeFilters()).items
                         val target = candidates.firstOrNull { normalizeTitle(it.title) == normalizeTitle(row.title) }
-                            ?: candidates.firstOrNull()
                         if (target == null) skipped++ else {
                             val status = when (row.status.lowercase()) {
                                 "completed" -> "COMPLETED"
