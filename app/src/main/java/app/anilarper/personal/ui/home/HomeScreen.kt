@@ -27,6 +27,7 @@ import app.anilarper.personal.Panel2
 import app.anilarper.personal.Violet
 import app.anilarper.personal.Muted
 import app.anilarper.personal.White
+import app.anilarper.personal.QuickTile
 
 @Composable
 fun HomeScreen(
