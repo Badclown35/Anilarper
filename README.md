@@ -2,11 +2,13 @@
 
 A personal, native Android anime, manga, light-novel, and soundtrack companion built around rediscovery, tracking, and low-pressure exploration.
 
-## Current build: 0.5.0
+## Current build: 0.6.0
 
 - Kotlin + Jetpack Compose; modern dark interface with violet accents
 - Home, Discover, Library, Read, Music, Quests, and Profile sections
-- Live anime trending and title search through the AniList GraphQL API
+- Paginated anime trending and title search through the AniList GraphQL API
+- Seasonal browsing by season and year, with genre, format, status, and sort filters
+- Expanded anime details with genres, studios, season metadata, synopsis, and connected franchise entries
 - Anime details, cover art, episode counts, scores, and synopsis
 - Local anime library with episode progress and five watch statuses
 - Manga and light-novel discovery through AniList
@@ -65,3 +67,4 @@ Profile settings and quest progress are stored locally. Avatar images are loaded
 - The bottom navigation is reduced to Home, Discover, Library, and More. Read, Music, Quests, and Profile are grouped in a bottom sheet to reduce crowding on phones.
 
 Streaming links are bookmarks/launch points; they are not downloaded or re-hosted by Anilarper. In-app playback for third-party services requires each service's permitted player/embed integration and is a separate follow-up.
+\n\n## 0.6.0 — Discovery & Franchise Update\n\n- Paginated anime catalog results with a Load more control.\n- Browse by season and year, genre, format, release status, and sort order.\n- Expanded title details with genres, studios, season/year, and synopsis.\n- Connected anime entries with relationship labels for sequels, prequels, side stories, movies, and other franchise links.\n- Search and catalog loading errors now offer a retry path; AniList rate-limit responses are handled with a clear message.\n- Existing local anime, reading, profile, quest, and music data formats remain unchanged.\n
