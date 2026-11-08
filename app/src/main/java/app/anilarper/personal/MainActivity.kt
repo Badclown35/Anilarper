@@ -43,6 +43,7 @@ import app.anilarper.personal.ui.home.DashboardStat
 import app.anilarper.personal.ui.reading.ReadingScreen
 import app.anilarper.personal.ui.library.LibraryScreen
 import app.anilarper.personal.ui.discover.DiscoverScreen
+import app.anilarper.personal.ui.music.MusicScreen
 import androidx.lifecycle.ViewModelProvider
 import app.anilarper.personal.data.AnimeLibraryViewModel
 import app.anilarper.personal.data.ReadingLibraryViewModel
@@ -212,286 +213,15 @@ private fun AnilarperApp() {
     }
 }
 
-@Composable
-private fun MusicScreen(modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    var shuffle by remember { mutableStateOf(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getBoolean("musicShuffle", false)) }
-    var savedTracks by remember { mutableStateOf(loadTracks(context)) }
-    var tracks by remember { mutableStateOf(savedTracks.let { if (shuffle) it.shuffled() else it }) }
-    var repeatOne by remember { mutableStateOf(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getBoolean("musicRepeatOne", false)) }
-    val repeatOneLatest by rememberUpdatedState(repeatOne)
-    var current by remember { mutableStateOf<String?>(null) }
-    var playing by remember { mutableStateOf(false) }
-    var player by remember { mutableStateOf<MediaPlayer?>(null) }
-    val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
-    val focusRequest = remember {
-        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-            .setOnAudioFocusChangeListener { change ->
-                if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
-                    runCatching { player?.pause() }
-                    playing = false
-                }
-            }.build()
-    }
-    var message by remember { mutableStateOf<String?>(null) }
-    var showLinkDialog by remember { mutableStateOf(false) }
-    var linkTitle by remember { mutableStateOf("") }
-    var linkUrl by remember { mutableStateOf("") }
-    var links by remember { mutableStateOf(loadMusicLinks(context)) }
-    var preparing by remember { mutableStateOf(false) }
-    fun startTrack(track: LocalTrack) {
-        runCatching {
-            player?.release()
-            player = null
-            playing = false
-            preparing = true
-            val next = MediaPlayer()
-            next.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
-            next.setDataSource(context, Uri.parse(track.uri))
-            next.setOnPreparedListener { prepared ->
-                if (player === prepared) {
-                    if (audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-                        prepared.start()
-                        playing = true
-                        message = null
-                    } else {
-                        playing = false
-                        message = "Couldn't get audio focus."
-                    }
-                    preparing = false
-                }
-            }
-            next.setOnCompletionListener { completed ->
-                if (repeatOneLatest) {
-                    completed.seekTo(0)
-                    completed.start()
-                } else {
-                    val index = tracks.indexOfFirst { it.uri == track.uri }
-                    val queuedNext = tracks.getOrNull(index + 1)
-                    if (queuedNext != null) startTrack(queuedNext) else playing = false
-                }
-            }
-            next.setOnErrorListener { failed, what, extra ->
-                if (player === failed) {
-                    preparing = false
-                    playing = false
-                    player = null
-                    message = "This audio file couldn't be played (code $what/$extra). Try another format or re-add it."
-                }
-                runCatching { failed.release() }
-                true
-            }
-            player = next
-            current = track.uri
-            message = "Preparing audio…"
-            next.prepareAsync()
-        }.onFailure {
-            runCatching { player?.release() }
-            preparing = false
-            playing = false
-            player = null
-            message = it.message ?: "Unable to open this audio file."
-        }
-    }
-    fun playAdjacent(offset: Int) {
-        val index = tracks.indexOfFirst { it.uri == current }
-        val target = tracks.getOrNull(index + offset)
-        if (target != null) startTrack(target)
-    }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            val trackName = runCatching {
-                context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
-                    ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-            }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/') ?: "Audio track"
-            val track = LocalTrack(uri.toString(), trackName)
-            if (savedTracks.none { it.uri == track.uri }) {
-                savedTracks = savedTracks + track
-                tracks = if (shuffle) savedTracks.shuffled() else savedTracks
-                persistTracks(context, savedTracks)
-            }
-            message = "Added to your local soundtrack library."
-        }
-    }
-    val playerRef by rememberUpdatedState(player)
-    DisposableEffect(Unit) { onDispose {
-        playerRef?.release()
-        audioManager.abandonAudioFocusRequest(focusRequest)
-    } }
-    Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-        Spacer(Modifier.height(18.dp))
-        Text("ANILARPER AUDIO", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Text("Your soundtrack hub.", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-        Text("Keep your favorite listening sources together.", color = Muted, fontSize = 12.sp)
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { showLinkDialog = true },
-                colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = Ink),
-                shape = RoundedCornerShape(13.dp), modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.Link, contentDescription = null)
-                Spacer(Modifier.width(5.dp)); Text("Add music link", fontWeight = FontWeight.Bold)
-            }
-            OutlinedButton(onClick = { picker.launch(arrayOf("audio/*")) },
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Violet),
-                shape = RoundedCornerShape(13.dp), modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.AudioFile, contentDescription = null)
-                Spacer(Modifier.width(5.dp)); Text("Add local file")
-            }
-        }
-        message?.let { Text(it, color = Violet, fontSize = 11.sp) }
-        if (tracks.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth().background(Panel2, RoundedCornerShape(13.dp)).padding(horizontal = 10.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("PLAYBACK OPTIONS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = {
-                        shuffle = !shuffle
-                        context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putBoolean("musicShuffle", shuffle).apply()
-                        tracks = if (shuffle) savedTracks.shuffled() else savedTracks
-                    }) { Icon(Icons.Default.Shuffle, contentDescription = null, tint = if (shuffle) Violet else Muted); Text("Shuffle", color = if (shuffle) Violet else Muted, fontSize = 10.sp) }
-                    TextButton(onClick = {
-                        repeatOne = !repeatOne
-                        context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putBoolean("musicRepeatOne", repeatOne).apply()
-                    }) { Icon(Icons.Default.RepeatOne, contentDescription = null, tint = if (repeatOne) Violet else Muted); Text("Repeat one", color = if (repeatOne) Violet else Muted, fontSize = 10.sp) }
-                }
-            }
-        }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp),
-            contentPadding = PaddingValues(bottom = 20.dp), modifier = Modifier.weight(1f)) {
-            if (links.isNotEmpty()) {
-                item { Text("STREAMING LINKS", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
-                items(links, key = { it.url }) { link ->
-                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).clickable {
-                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url))) }
-                            .onFailure { message = "Couldn't open this music link." }
-                    }.padding(13.dp), verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Icon(Icons.Default.OpenInNew, contentDescription = null, tint = Violet, modifier = Modifier.size(26.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(link.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
-                            Text(link.source, color = Muted, fontSize = 10.sp)
-                        }
-                        IconButton(onClick = {
-                            links = links.filterNot { it.url == link.url }; persistMusicLinks(context, links)
-                        }) { Icon(Icons.Default.DeleteOutline, contentDescription = "Remove link", tint = Muted) }
-                    }
-                }
-            }
-            if (tracks.isNotEmpty()) {
-                item { Text("LOCAL AUDIO FILES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
-                items(tracks, key = { it.uri }) { track ->
-                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(13.dp)).clickable {
-                        if (current == track.uri && player != null) {
-                            if (preparing) {
-                                message = "Audio is still preparing…"
-                            } else if (playing) {
-                                player?.pause()
-                                playing = false
-                            } else {
-                                runCatching { player?.start(); playing = true }
-                                    .onFailure { startTrack(track) }
-                            }
-                        } else {
-                            startTrack(track)
-                        }
-                    }.padding(13.dp), verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Icon(if (current == track.uri && playing) Icons.Default.PauseCircle else Icons.Default.PlayCircle,
-                            contentDescription = "Play " + track.title, tint = Violet, modifier = Modifier.size(30.dp))
-                        Text(track.title, color = White, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 2)
-                        IconButton(onClick = {
-                            if (current == track.uri) { player?.release(); player = null; current = null; playing = false }
-                            tracks = tracks.filterNot { it.uri == track.uri }; persistTracks(context, tracks)
-                        }) { Icon(Icons.Default.DeleteOutline, contentDescription = "Remove track", tint = Muted) }
-                    }
-                }
-            }
-            if (links.isEmpty() && tracks.isEmpty()) item {
-                Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Default.MusicNote, contentDescription = null, tint = Violet, modifier = Modifier.size(34.dp))
-                    Text("Your music shelf is empty.", color = White, fontWeight = FontWeight.SemiBold)
-                    Text("Add a YouTube, SoundCloud, Spotify, Apple Music, or other listening link—or add an audio file stored on your phone.",
-                        color = Muted, fontSize = 12.sp)
-                }
-            }
-        }
-        if (current != null) {
-            Row(Modifier.fillMaxWidth().background(Panel2, RoundedCornerShape(14.dp)).padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(if (preparing) "PREPARING · LOCAL AUDIO" else "NOW PLAYING · LOCAL", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                    Text(tracks.firstOrNull { it.uri == current }?.title ?: "Audio track", color = White, fontSize = 12.sp, maxLines = 1)
-                }
-                IconButton(onClick = { playAdjacent(-1) }, enabled = tracks.indexOfFirst { it.uri == current } > 0) {
-                    Icon(Icons.Default.SkipPrevious, contentDescription = "Previous track", tint = Violet)
-                }
-                IconButton(onClick = {
-                    if (preparing) message = "Audio is still preparing…"
-                    else if (playing) { player?.pause(); playing = false }
-                    else runCatching { player?.start(); playing = true }.onFailure { message = "Playback is unavailable. Try selecting the track again." }
-                }, enabled = !preparing) {
-                    Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause", tint = Violet)
-                }
-                IconButton(onClick = { playAdjacent(1) }, enabled = tracks.indexOfFirst { it.uri == current } < tracks.lastIndex) {
-                    Icon(Icons.Default.SkipNext, contentDescription = "Next track", tint = Violet)
-                }
-            }
-        }
-    }
-    if (showLinkDialog) {
-        AlertDialog(onDismissRequest = { showLinkDialog = false }, containerColor = Panel2,
-            title = { Text("Add a listening link", color = White) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(linkTitle, { linkTitle = it.take(70) }, singleLine = true,
-                        label = { Text("Name") }, placeholder = { Text("Anime OST playlist") })
-                    OutlinedTextField(linkUrl, { linkUrl = it.take(1000) }, singleLine = true,
-                        label = { Text("Music URL") }, placeholder = { Text("https://…") })
-                    Text("Opens through the service's official app or website. Anilarper doesn't download or re-host streams.",
-                        color = Muted, fontSize = 10.sp)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val parsed = runCatching { Uri.parse(linkUrl.trim()) }.getOrNull()
-                    if (parsed != null && parsed.scheme == "https" && !parsed.host.isNullOrBlank()) {
-                        val host = parsed.host!!.lowercase()
-                        val source = when {
-                            host.contains("youtube.com") || host == "youtu.be" -> "YouTube"
-                            host.contains("soundcloud.com") -> "SoundCloud"
-                            host.contains("spotify.com") -> "Spotify"
-                            host.contains("music.apple.com") -> "Apple Music"
-                            host.contains("music.youtube.com") -> "YouTube Music"
-                            else -> host.removePrefix("www.")
-                        }
-                        val item = MusicLink(linkTitle.ifBlank { source + " link" }, parsed.toString(), source)
-                        if (links.none { it.url == item.url }) { links = links + item; persistMusicLinks(context, links) }
-                        linkTitle = ""; linkUrl = ""; showLinkDialog = false; message = "Listening link saved."
-                    } else message = "Enter a valid HTTPS music link."
-                }) { Text("Save link", color = Violet) }
-            },
-            dismissButton = { TextButton(onClick = { showLinkDialog = false }) { Text("Cancel", color = Muted) } }
-        )
-    }
-}
 
-private data class MusicLink(val title: String, val url: String, val source: String)
+internal data class MusicLink(val title: String, val url: String, val source: String)
 
-private fun loadMusicLinks(context: Context): List<MusicLink> =
+internal fun loadMusicLinks(context: Context): List<MusicLink> =
     readJsonArray(context, "musicLinks")?.mapSafe { o ->
         MusicLink(o.getString("title"), o.getString("url"), o.getString("source"))
     } ?: emptyList()
 
-private fun persistMusicLinks(context: Context, links: List<MusicLink>) {
+internal fun persistMusicLinks(context: Context, links: List<MusicLink>) {
     val a = JSONArray()
     links.forEach { a.put(JSONObject().put("title", it.title).put("url", it.url).put("source", it.source)) }
     context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putString("musicLinks", a.toString()).apply()
@@ -963,7 +693,7 @@ private fun ProfileStat(label: String, value: String, modifier: Modifier = Modif
     }
 }
 
-private data class LocalTrack(val uri: String, val title: String)
+internal data class LocalTrack(val uri: String, val title: String)
 
 private fun <T> JSONArray.mapSafe(block: (JSONObject) -> T): List<T> =
     (0 until length()).mapNotNull { index -> runCatching { block(getJSONObject(index)) }.getOrNull() }
@@ -980,12 +710,12 @@ private fun readJsonArray(context: Context, key: String): JSONArray? {
     }
 }
 
-private fun loadTracks(context: Context): List<LocalTrack> =
+internal fun loadTracks(context: Context): List<LocalTrack> =
     readJsonArray(context, "tracks")?.mapSafe { item ->
         LocalTrack(item.getString("uri"), item.optString("title", "Audio track").ifBlank { "Audio track" })
     } ?: emptyList()
 
-private fun persistTracks(context: Context, tracks: List<LocalTrack>) {
+internal fun persistTracks(context: Context, tracks: List<LocalTrack>) {
     val array = JSONArray()
     tracks.forEach { array.put(JSONObject().put("uri", it.uri).put("title", it.title)) }
     context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putString("tracks", array.toString()).apply()
