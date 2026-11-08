@@ -678,7 +678,7 @@ private fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, o
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("\${visible.size} \${if (visible.size == 1) "TITLE" else "TITLES"}", color = Violet,
+            Text("${visible.size} ${if (visible.size == 1) "TITLE" else "TITLES"}", color = Violet,
                 fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
             Spacer(Modifier.weight(1f))
             Text("Tap + / − to update episodes", color = Muted, fontSize = 10.sp)
@@ -720,8 +720,8 @@ private fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, o
                                 Text(anime.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
                                 Text(anime.watchStatus.replace('_', ' '), color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .6.sp)
                                 Text(
-                                    if (anime.episodes != null) "\${anime.progress} / \${anime.episodes} episodes"
-                                    else "\${anime.progress} episodes tracked",
+                                    if (anime.episodes != null) "${anime.progress} / ${anime.episodes} episodes"
+                                    else "${anime.progress} episodes tracked",
                                     color = Muted, fontSize = 11.sp
                                 )
                                 if (anime.episodes != null && anime.episodes > 0) {
@@ -733,7 +733,7 @@ private fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, o
                                 }
                             }
                             IconButton(onClick = { onRemove(anime) }) {
-                                Icon(Icons.Default.BookmarkRemove, contentDescription = "Remove \${anime.title}", tint = Muted)
+                                Icon(Icons.Default.BookmarkRemove, contentDescription = "Remove ${anime.title}", tint = Muted)
                             }
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
