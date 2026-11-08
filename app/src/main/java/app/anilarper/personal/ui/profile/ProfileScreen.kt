@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import app.anilarper.personal.theme.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -103,7 +104,7 @@ private fun saveProfile(context: Context, profile: ProfileSettings) {
 private fun ProfileScreen(context: Context, library: List<Anime>,
     readingLibrary: List<ReadingTitle>, modifier: Modifier = Modifier) {
     var profile by remember { mutableStateOf(loadProfile(context)) }
-    var editing by remember { mutableStateOf(false) }
+    var editing by rememberSaveable { mutableStateOf(false) }
     val bannerColors = listOf(
         listOf(Color(0xFF30294F), Color(0xFF171923), Color(0xFF252039)),
         listOf(Color(0xFF193D45), Color(0xFF171923), Color(0xFF24334A)),
@@ -182,12 +183,12 @@ private fun ProfileScreen(context: Context, library: List<Anime>,
         Spacer(Modifier.height(12.dp))
     }
     if (editing) {
-        var name by remember(profile) { mutableStateOf(profile.displayName) }
-        var bio by remember(profile) { mutableStateOf(profile.bio) }
-        var avatar by remember(profile) { mutableStateOf(profile.avatarUrl) }
-        var favorites by remember(profile) { mutableStateOf(profile.favoriteTitles) }
-        var banner by remember(profile) { mutableIntStateOf(profile.bannerStyle) }
-        var accent by remember(profile) { mutableIntStateOf(profile.accentStyle) }
+        var name by rememberSaveable(profile) { mutableStateOf(profile.displayName) }
+        var bio by rememberSaveable(profile) { mutableStateOf(profile.bio) }
+        var avatar by rememberSaveable(profile) { mutableStateOf(profile.avatarUrl) }
+        var favorites by rememberSaveable(profile) { mutableStateOf(profile.favoriteTitles) }
+        var banner by rememberSaveable(profile) { mutableIntStateOf(profile.bannerStyle) }
+        var accent by rememberSaveable(profile) { mutableIntStateOf(profile.accentStyle) }
         AlertDialog(
             onDismissRequest = { editing = false }, containerColor = Panel2,
             title = { Text("Customize your profile", color = White, fontWeight = FontWeight.Bold) },
