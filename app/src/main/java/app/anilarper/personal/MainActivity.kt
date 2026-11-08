@@ -623,77 +623,155 @@ private fun AnimeRow(anime: Anime, saved: Boolean, onClick: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, onRemove: (Anime) -> Unit, onUpdate: (Anime) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var statusFilter by remember { mutableStateOf("ALL") }
+    val filters = listOf("ALL", "WATCHING", "PLANNING", "COMPLETED", "PAUSED", "DROPPED")
+    val visible = library.filter { anime ->
+        (statusFilter == "ALL" || anime.watchStatus == statusFilter) &&
+            (query.isBlank() || anime.title.contains(query, ignoreCase = true))
+    }
+    val watching = library.count { it.watchStatus == "WATCHING" }
+    val completed = library.count { it.watchStatus == "COMPLETED" }
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-        Spacer(Modifier.height(20.dp))
-        Text("YOUR LIBRARY", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Text("Saved for later.", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-        Text("${library.size} saved anime • ${library.count { it.watchStatus == "COMPLETED" }} completed", color = Muted, fontSize = 12.sp)
-        Spacer(Modifier.height(16.dp))
-        if (library.isEmpty()) {
-            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.Bookmarks, contentDescription = null, tint = Violet, modifier = Modifier.size(32.dp))
-                Text("Your list starts here.", color = White, fontWeight = FontWeight.SemiBold)
-                Text("Find anime in Discover and save titles you want to keep track of.", color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.height(18.dp))
+        Text("YOUR COLLECTION", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        Text("Your library", color = White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+        Text("Everything you're watching, finished, or saving for later.", color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            DashboardStat("SAVED", library.size.toString(), Icons.Default.Bookmarks, Modifier.weight(1f))
+            DashboardStat("WATCHING", watching.toString(), Icons.Default.PlayCircle, Modifier.weight(1f))
+            DashboardStat("COMPLETED", completed.toString(), Icons.Default.CheckCircle, Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(13.dp))
+        OutlinedTextField(
+            value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("Find something in your library…", color = Muted) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Muted) },
+            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) {
+                Icon(Icons.Default.Close, contentDescription = "Clear search", tint = Muted)
+            } },
+            singleLine = true, shape = RoundedCornerShape(15.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Violet, unfocusedBorderColor = Panel2,
+                focusedTextColor = White, unfocusedTextColor = White, cursorColor = Violet
+            )
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 9.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            filters.forEach { filter ->
+                FilterChip(
+                    selected = statusFilter == filter,
+                    onClick = { statusFilter = filter },
+                    label = { Text(if (filter == "ALL") "All titles" else filter.lowercase().replaceFirstChar { it.uppercase() }, fontSize = 11.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Violet.copy(alpha = .18f),
+                        selectedLabelColor = Violet,
+                        labelColor = Muted
+                    )
+                )
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("\${visible.size} \${if (visible.size == 1) "TITLE" else "TITLES"}", color = Violet,
+                fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+            Spacer(Modifier.weight(1f))
+            Text("Tap + / − to update episodes", color = Muted, fontSize = 10.sp)
+        }
+        Spacer(Modifier.height(7.dp))
+        if (visible.isEmpty()) {
+            Column(
+                Modifier.fillMaxWidth().weight(1f).background(Panel, RoundedCornerShape(20.dp)).padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp), horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(if (library.isEmpty()) Icons.Default.Bookmarks else Icons.Default.SearchOff,
+                    contentDescription = null, tint = Violet, modifier = Modifier.size(34.dp))
+                Text(if (library.isEmpty()) "Your collection starts here." else "No matching titles.",
+                    color = White, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                Text(
+                    if (library.isEmpty()) "Explore anime and save titles to build your own collection."
+                    else "Try another title or switch to a different status filter.",
+                    color = Muted, fontSize = 12.sp
+                )
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
-                items(library, key = { it.id }) { anime ->
-                    Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            AsyncImage(model = anime.cover, contentDescription = anime.title,
-                                modifier = Modifier.width(58.dp).height(76.dp).background(Panel2, RoundedCornerShape(8.dp)))
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 20.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                items(visible, key = { it.id }) { anime ->
+                    Column(
+                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(17.dp)).padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(9.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                            AsyncImage(
+                                model = anime.cover, contentDescription = anime.title,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier.width(66.dp).height(88.dp).background(Panel2, RoundedCornerShape(10.dp))
+                            )
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                                 Text(anime.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
-                                Text(anime.watchStatus.replace('_', ' '), color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                Text(if (anime.episodes != null) "${anime.progress} / ${anime.episodes} episodes" else "${anime.progress} episodes tracked",
-                                    color = Muted, fontSize = 11.sp)
+                                Text(anime.watchStatus.replace('_', ' '), color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .6.sp)
+                                Text(
+                                    if (anime.episodes != null) "\${anime.progress} / \${anime.episodes} episodes"
+                                    else "\${anime.progress} episodes tracked",
+                                    color = Muted, fontSize = 11.sp
+                                )
+                                if (anime.episodes != null && anime.episodes > 0) {
+                                    LinearProgressIndicator(
+                                        progress = { (anime.progress.toFloat() / anime.episodes).coerceIn(0f, 1f) },
+                                        modifier = Modifier.fillMaxWidth().height(5.dp),
+                                        color = Violet, trackColor = Panel2
+                                    )
+                                }
                             }
                             IconButton(onClick = { onRemove(anime) }) {
-                                Icon(Icons.Default.BookmarkRemove, contentDescription = "Remove", tint = Muted)
+                                Icon(Icons.Default.BookmarkRemove, contentDescription = "Remove \${anime.title}", tint = Muted)
                             }
-                        }
-                        if (anime.episodes != null && anime.episodes > 0) {
-                            LinearProgressIndicator(
-                                progress = { (anime.progress.toFloat() / anime.episodes).coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth().height(5.dp),
-                                color = Violet, trackColor = Panel2
-                            )
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Episodes watched", color = Muted, fontSize = 11.sp)
+                            Text("EPISODES WATCHED", color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
                             Spacer(Modifier.weight(1f))
-                            IconButton(onClick = { onUpdate(anime.copy(progress = (anime.progress - 1).coerceAtLeast(0))) },
-                                enabled = anime.progress > 0) {
-                                Icon(Icons.Default.RemoveCircleOutline, contentDescription = "Decrease episode", tint = Violet)
-                            }
-                            Text(anime.progress.toString(), color = White, fontWeight = FontWeight.Bold)
-                            IconButton(onClick = {
-                                val next = anime.progress + 1
-                                val capped = anime.episodes?.let { next.coerceAtMost(it) } ?: next
-                                onUpdate(anime.copy(progress = capped,
-                                    watchStatus = if (anime.episodes != null && capped >= anime.episodes) "COMPLETED" else "WATCHING",
-                                    lastWatchedAt = System.currentTimeMillis()))
-                            }, enabled = anime.episodes == null || anime.progress < anime.episodes) {
-                                Icon(Icons.Default.AddCircleOutline, contentDescription = "Increase episode", tint = Violet)
-                            }
+                            IconButton(
+                                onClick = { onUpdate(anime.copy(progress = (anime.progress - 1).coerceAtLeast(0))) },
+                                enabled = anime.progress > 0
+                            ) { Icon(Icons.Default.RemoveCircleOutline, contentDescription = "Decrease episode", tint = Violet) }
+                            Text(anime.progress.toString(), color = White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            IconButton(
+                                onClick = {
+                                    val next = anime.progress + 1
+                                    val capped = anime.episodes?.let { next.coerceAtMost(it) } ?: next
+                                    onUpdate(anime.copy(
+                                        progress = capped,
+                                        watchStatus = if (anime.episodes != null && capped >= anime.episodes) "COMPLETED" else "WATCHING",
+                                        lastWatchedAt = System.currentTimeMillis()
+                                    ))
+                                },
+                                enabled = anime.episodes == null || anime.progress < anime.episodes
+                            ) { Icon(Icons.Default.AddCircleOutline, contentDescription = "Increase episode", tint = Violet) }
                         }
                         var statusExpanded by remember(anime.id) { mutableStateOf(false) }
                         Box {
-                            TextButton(onClick = { statusExpanded = true }) {
-                                Text("Change status", color = Violet, fontSize = 11.sp)
+                            TextButton(onClick = { statusExpanded = true }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                                Text("Change watch status", color = Violet, fontSize = 11.sp)
                                 Icon(Icons.Default.ExpandMore, contentDescription = null, tint = Violet)
                             }
                             DropdownMenu(expanded = statusExpanded, onDismissRequest = { statusExpanded = false }) {
-                                listOf("PLANNING", "WATCHING", "COMPLETED", "PAUSED", "DROPPED").forEach { status ->
-                                    DropdownMenuItem(text = { Text(status.replace('_', ' ')) },
+                                filters.drop(1).forEach { status ->
+                                    DropdownMenuItem(
+                                        text = { Text(status.replace('_', ' ')) },
                                         onClick = {
                                             statusExpanded = false
                                             onUpdate(anime.copy(watchStatus = status))
-                                        })
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -703,7 +781,6 @@ private fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, o
         }
     }
 }
-
 
 @Composable
 private fun ReadingScreen(
