@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -39,6 +41,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -65,8 +69,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AnilarperApp() {
     val context = LocalContext.current
-    var selected by remember { mutableStateOf("Home") }
+    var selected by rememberSaveable { mutableStateOf("Home") }
     var moreOpen by remember { mutableStateOf(false) }
+    BackHandler(enabled = selected != "Home" || moreOpen) {
+        if (moreOpen) moreOpen = false else selected = "Home"
+    }
     var library by remember { mutableStateOf(loadLibrary(context)) }
     var readingLibrary by remember { mutableStateOf(loadReadingLibrary(context)) }
     LaunchedEffect(Unit) {
@@ -391,9 +398,11 @@ private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, on
     var filterMenu by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
+    var loadJob by remember { mutableStateOf<Job?>(null) }
 
     fun load(reset: Boolean = true) {
-        scope.launch {
+        loadJob?.cancel()
+        loadJob = scope.launch {
             if (reset) { loading = true; page = 1; hasNext = false } else loadingMore = true
             error = null
             try {
@@ -407,7 +416,7 @@ private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, on
                 error = if (e.message?.contains("rate", true) == true)
                     "AniList is receiving too many requests. Wait a moment, then retry."
                 else "Couldn't load anime. Check your connection and try again."
-            } finally { loading = false; loadingMore = false }
+            } finally { if (isActive) { loading = false; loadingMore = false } }
         }
     }
     LaunchedEffect(Unit) { load() }
