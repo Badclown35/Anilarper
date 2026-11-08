@@ -1636,13 +1636,14 @@ private fun ProfileStat(label: String, value: String, modifier: Modifier = Modif
 
 private data class LocalTrack(val uri: String, val title: String)
 
-private fun loadTracks(context: Context): List<LocalTrack> = try {
-    val array = JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("tracks", "[]") ?: "[]")
-    (0 until array.length()).map { i ->
+private fun loadTracks(context: Context): List<LocalTrack> {
+    val array = runCatching { JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("tracks", "[]") ?: "[]" }.getOrNull()
+        ?: return emptyList()
+    return (0 until array.length()).mapNotNull { i -> runCatching {
         val item = array.getJSONObject(i)
-        LocalTrack(item.getString("uri"), item.getString("title"))
-    }
-} catch (_: Exception) { emptyList() }
+        LocalTrack(item.getString("uri"), item.optString("title", "Audio track").ifBlank { "Audio track" })
+    }.getOrNull() }
+}
 
 private fun persistTracks(context: Context, tracks: List<LocalTrack>) {
     val array = JSONArray()
@@ -1650,16 +1651,17 @@ private fun persistTracks(context: Context, tracks: List<LocalTrack>) {
     context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putString("tracks", array.toString()).apply()
 }
 
-private fun loadReadingLibrary(context: Context): List<ReadingTitle> = try {
-    val array = JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("readingLibrary", "[]") ?: "[]")
-    (0 until array.length()).map { i ->
+private fun loadReadingLibrary(context: Context): List<ReadingTitle> {
+    val array = runCatching { JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("readingLibrary", "[]") ?: "[]" }.getOrNull()
+        ?: return emptyList()
+    return (0 until array.length()).mapNotNull { i -> runCatching {
         val o = array.getJSONObject(i)
         ReadingTitle(o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
             o.optString("format"), o.optString("status"), if (o.isNull("chapters")) null else o.optInt("chapters"),
             if (o.isNull("volumes")) null else o.optInt("volumes"), o.optString("description"),
             o.optString("kind", "MANGA"), o.optInt("progress"), o.optInt("volumeProgress"), o.optString("readingStatus", "PLANNING"))
-    }
-} catch (_: Exception) { emptyList() }
+    }.getOrNull() }
+}
 
 private fun persistReadingLibrary(context: Context, library: List<ReadingTitle>) {
     val array = JSONArray()
@@ -1719,18 +1721,21 @@ private fun FeatureLine(text: String) {
     }
 }
 
-private fun loadLibrary(context: Context): List<Anime> = try {
-    val raw = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("library", "[]") ?: "[]"
-    val array = JSONArray(raw)
-    (0 until array.length()).map { i ->
+private fun loadLibrary(context: Context): List<Anime> {
+    val array = runCatching { JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("library", "[]") ?: "[]" }.getOrNull()
+        ?: return emptyList()
+    return (0 until array.length()).mapNotNull { i -> runCatching {
         val o = array.getJSONObject(i)
         Anime(o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
             o.optString("format"), o.optString("status"),
             if (o.isNull("episodes")) null else o.optInt("episodes"),
             if (o.isNull("score")) null else o.optInt("score"), o.optString("description"),
-            o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0), o.optLong("lastWatchedAt", 0L))
-    }
-} catch (_: Exception) { emptyList() }
+            o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0), o.optLong("lastWatchedAt", 0L),
+            o.optString("season"), if (o.isNull("seasonYear")) null else o.optInt("seasonYear"),
+            o.optJSONArray("genres")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList(),
+            o.optJSONArray("studios")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList())
+    }.getOrNull() }
+}
 
 private fun persistLibrary(context: Context, library: List<Anime>) {
     val array = JSONArray()
@@ -1739,7 +1744,8 @@ private fun persistLibrary(context: Context, library: List<Anime>) {
             .put("cover", a.cover).put("format", a.format).put("status", a.status)
             .put("episodes", a.episodes).put("score", a.score).put("description", a.description)
             .put("watchStatus", a.watchStatus).put("progress", a.progress)
-            .put("lastWatchedAt", a.lastWatchedAt))
+            .put("lastWatchedAt", a.lastWatchedAt).put("season", a.season).put("seasonYear", a.seasonYear)
+            .put("genres", JSONArray(a.genres)).put("studios", JSONArray(a.studios)))
     }
     context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit()
         .putString("library", array.toString()).apply()
