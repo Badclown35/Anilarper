@@ -145,7 +145,12 @@ private fun AnilarperApp() {
                 "Quests" -> QuestScreen(context, library, readingLibrary, Modifier.padding(padding))
                 "Stats" -> StatisticsScreen(library, readingLibrary, Modifier.padding(padding))
                 "History" -> WatchHistoryScreen(library, Modifier.padding(padding))
-                "Backup" -> BackupScreen(context, Modifier.padding(padding))
+                "Backup" -> BackupScreen(context, Modifier.padding(padding), onRestored = {
+                    library = loadLibrary(context)
+                    readingLibrary = loadReadingLibrary(context)
+                    val accent = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getInt("profileAccent", 0)
+                    VioletState.value = AccentPalette[accent.coerceIn(0, AccentPalette.lastIndex)]
+                })
                 else -> ProfileScreen(context, library, readingLibrary, Modifier.padding(padding))
             }
         }
@@ -1291,7 +1296,7 @@ private fun QuestScreen(context: Context, library: List<Anime>,
 }
 
 @Composable
-private fun BackupScreen(context: Context, modifier: Modifier = Modifier) {
+private fun BackupScreen(context: Context, modifier: Modifier = Modifier, onRestored: () -> Unit = {}) {
     var message by remember { mutableStateOf<String?>(null) }
     var confirmRestore by remember { mutableStateOf<Uri?>(null) }
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
@@ -1346,8 +1351,14 @@ private fun BackupScreen(context: Context, modifier: Modifier = Modifier) {
                             ?: error("Couldn't read the selected file.")
                         val backup = JSONObject(raw)
                         require(backup.optString("format") == "anilarper-backup") { "This isn't an Anilarper backup file." }
+                        require(backup.optInt("version", 0) == 1) { "Unsupported backup version." }
                         val values = backup.getJSONObject("preferences")
-                        val editor = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().clear()
+                        require(values.length() > 0) { "This backup contains no data. Nothing was changed." }
+                        val prefs = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE)
+                        val snapshot = JSONObject().put("format", "anilarper-backup").put("version", 1)
+                            .put("preferences", JSONObject(prefs.all))
+                        java.io.File(context.filesDir, "pre-restore-backup.json").writeText(snapshot.toString())
+                        val editor = prefs.edit().clear()
                         val keys = values.keys()
                         while (keys.hasNext()) {
                             val key = keys.next()
@@ -1362,7 +1373,7 @@ private fun BackupScreen(context: Context, modifier: Modifier = Modifier) {
                             }
                         }
                         check(editor.commit()) { "Couldn't save the restored data." }
-                    }.onSuccess { message = "Backup restored. Reopen Anilarper to refresh every screen." }
+                    }.onSuccess { onRestored(); message = "Backup restored." }
                         .onFailure { message = it.message ?: "Restore failed. Your data may not have changed." }
                 }) { Text("Restore", color = Violet) }
             },
