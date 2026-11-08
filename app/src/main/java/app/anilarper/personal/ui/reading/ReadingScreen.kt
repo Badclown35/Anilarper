@@ -18,16 +18,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
+import app.anilarper.personal.theme.*
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import app.anilarper.personal.AniListReadingApi
 import app.anilarper.personal.ReadingTitle
-import app.anilarper.personal.Ink
-import app.anilarper.personal.Panel
-import app.anilarper.personal.Panel2
-import app.anilarper.personal.Violet
-import app.anilarper.personal.Muted
-import app.anilarper.personal.White
 
 @Composable
 fun ReadingScreen(
