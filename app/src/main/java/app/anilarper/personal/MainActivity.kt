@@ -41,6 +41,8 @@ import app.anilarper.personal.ui.backup.BackupScreen
 import app.anilarper.personal.ui.stats.WatchHistoryScreen
 import app.anilarper.personal.ui.stats.StatisticsScreen
 import app.anilarper.personal.ui.profile.ProfileScreen
+import app.anilarper.personal.ui.extras.CustomListsScreen
+import app.anilarper.personal.ui.extras.RecommendationsScreen
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -128,6 +130,8 @@ private fun AnilarperApp() {
                         Modifier.fillMaxSize(), library.map { it.id }.toSet(), discoverViewModel
                     ) { anime -> animeViewModel.toggle(anime) }
                 }
+                composable("CustomLists") { CustomListsScreen(library, Modifier.fillMaxSize()) }
+                composable("Recommendations") { RecommendationsScreen(library, { animeViewModel.toggle(it) }, Modifier.fillMaxSize()) }
                 composable("Library") {
                     LibraryScreen(Modifier.fillMaxSize(), library,
                         onRemove = { animeViewModel.remove(it) },
@@ -168,7 +172,9 @@ private fun AnilarperApp() {
                         Triple("Stats", "Your anime and reading activity", Icons.Default.Insights),
                         Triple("History", "Recently updated episodes", Icons.Default.History),
                         Triple("Backup", "Export or restore your collection", Icons.Default.Backup),
-                        Triple("Profile", "Your personal space", Icons.Default.Person)
+                        Triple("Profile", "Your personal space", Icons.Default.Person),
+                        Triple("CustomLists", "Your own anime collections", Icons.Default.Bookmarks),
+                        Triple("Recommendations", "Find your next favorite", Icons.Default.AutoAwesome)
                     ).forEach { (label, subtitle, icon) ->
                         Row(Modifier.fillMaxWidth().clickable { navController.navigate(label) { launchSingleTop = true }; moreOpen = false }
                             .background(Panel2, RoundedCornerShape(14.dp)).padding(15.dp),
