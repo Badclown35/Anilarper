@@ -124,7 +124,7 @@ object AniListReadingApi {
                 }
             }
         """.trimIndent()
-        val formats = if (novels) JSONArray().put("NOVEL").put("LIGHT_NOVEL")
+        val formats = if (novels) JSONArray().put("NOVEL")
             else JSONArray().put("MANGA").put("ONE_SHOT")
         val variables = JSONObject()
             .put("formats", formats)
