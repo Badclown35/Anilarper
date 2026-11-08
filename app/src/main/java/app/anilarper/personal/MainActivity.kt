@@ -90,9 +90,11 @@ private fun AnilarperApp() {
                             onClick = {
                                 if (label == "More") moreOpen = true
                                 else navController.navigate(label) {
-                                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                    // Always navigate to the explicitly selected top-level destination.
+                                    // Restoring saved stacks here was causing the bottom bar to reopen
+                                    // an unrelated More destination (for example Music or Read).
+                                    popUpTo("Home") { inclusive = false; saveState = false }
                                     launchSingleTop = true
-                                    restoreState = true
                                 }
                             },
                             icon = { Icon(icon, contentDescription = label,
