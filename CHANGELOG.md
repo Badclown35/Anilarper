@@ -26,3 +26,14 @@ All notable changes to Anilarper are documented here.
 - Made key screen inputs and profile editor drafts saveable across navigation.
 - Replaced string-based screen switching with Navigation Compose, including saved bottom-tab back stacks and navigation-managed Back behavior.
 - Remaining: verify the latest refactor build, review any regressions, and device-test navigation/state restoration. Phase 2 stays open until those checks pass.
+
+## Phase 3 — Feature checkpoint (2026-11-08; build/device verification pending)
+
+- Added Room collection storage and a one-time import from existing SharedPreferences JSON; original preferences remain available as a recovery source.
+- Added a Room catalog cache with 30-day expiry and offline fallback for Discover and reading search.
+- Added a Media3 playback service/session with queue, audio focus, background playback, notification and lock-screen transport controls.
+- Backup export now includes Room collections; restore snapshots the current database-backed backup before applying and refreshes collection state.
+- Added user-created anime lists.
+- Added genre-based AniList recommendations.
+- Added MyAnimeList anime CSV import with AniList ID matching, status/progress/score transfer, and a preview.
+- Fixed bottom navigation to avoid restoring an unrelated More destination.
