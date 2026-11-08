@@ -2,6 +2,7 @@ package app.anilarper.personal
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -36,7 +37,7 @@ object AniListApi {
                 }
             }
         """.trimIndent()
-        val variables = JSONObject().put("sort", if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH")
+        val variables = JSONObject().put("sort", JSONArray().put(if (query.isBlank()) "TRENDING_DESC" else "SEARCH_MATCH"))
         if (query.isNotBlank()) variables.put("search", query)
         val body = JSONObject().put("query", gql).put("variables", variables)
 
