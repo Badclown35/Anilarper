@@ -921,7 +921,8 @@ private fun ReadingScreen(
 private fun MusicScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var shuffle by remember { mutableStateOf(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getBoolean("musicShuffle", false)) }
-    var tracks by remember { mutableStateOf(loadTracks(context).let { if (shuffle) it.shuffled() else it }) }
+    var savedTracks by remember { mutableStateOf(loadTracks(context)) }
+    var tracks by remember { mutableStateOf(savedTracks.let { if (shuffle) it.shuffled() else it }) }
     var repeatOne by remember { mutableStateOf(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getBoolean("musicRepeatOne", false)) }
     val repeatOneLatest by rememberUpdatedState(repeatOne)
     var current by remember { mutableStateOf<String?>(null) }
@@ -994,8 +995,16 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            val track = LocalTrack(uri.toString(), uri.lastPathSegment?.substringAfterLast('/')?.substringBefore('?') ?: "Audio track")
-            if (tracks.none { it.uri == track.uri }) { tracks = tracks + track; persistTracks(context, tracks) }
+            val trackName = runCatching {
+                context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+            }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/') ?: "Audio track"
+            val track = LocalTrack(uri.toString(), trackName)
+            if (savedTracks.none { it.uri == track.uri }) {
+                savedTracks = savedTracks + track
+                tracks = if (shuffle) savedTracks.shuffled() else savedTracks
+                persistTracks(context, savedTracks)
+            }
             message = "Added to your local soundtrack library."
         }
     }
@@ -1030,7 +1039,7 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
                     TextButton(onClick = {
                         shuffle = !shuffle
                         context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putBoolean("musicShuffle", shuffle).apply()
-                        if (shuffle) { tracks = tracks.shuffled() } else { tracks = loadTracks(context) }
+                        tracks = if (shuffle) savedTracks.shuffled() else savedTracks
                     }) { Icon(Icons.Default.Shuffle, contentDescription = null, tint = if (shuffle) Violet else Muted); Text("Shuffle", color = if (shuffle) Violet else Muted, fontSize = 10.sp) }
                     TextButton(onClick = {
                         repeatOne = !repeatOne
