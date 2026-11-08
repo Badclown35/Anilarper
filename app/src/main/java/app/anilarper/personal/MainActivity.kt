@@ -932,6 +932,14 @@ private fun ReadingScreen(
 @Composable
 private fun MusicScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    var shuffle by remember { mutableStateOf(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getBoolean("musicShuffle", false)) }
+    var savedTracks by remember { mutableStateOf(loadTracks(context)) }
+    var tracks by remember { mutableStateOf(savedTracks.let { if (shuffle) it.shuffled() else it }) }
+    var repeatOne by remember { mutableStateOf(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getBoolean("musicRepeatOne", false)) }
+    val repeatOneLatest by rememberUpdatedState(repeatOne)
+    var current by remember { mutableStateOf<String?>(null) }
+    var playing by remember { mutableStateOf(false) }
+    var player by remember { mutableStateOf<MediaPlayer?>(null) }
     val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val focusRequest = remember {
         AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
@@ -944,14 +952,6 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
                 }
             }.build()
     }
-    var shuffle by remember { mutableStateOf(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getBoolean("musicShuffle", false)) }
-    var savedTracks by remember { mutableStateOf(loadTracks(context)) }
-    var tracks by remember { mutableStateOf(savedTracks.let { if (shuffle) it.shuffled() else it }) }
-    var repeatOne by remember { mutableStateOf(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getBoolean("musicRepeatOne", false)) }
-    val repeatOneLatest by rememberUpdatedState(repeatOne)
-    var current by remember { mutableStateOf<String?>(null) }
-    var playing by remember { mutableStateOf(false) }
-    var player by remember { mutableStateOf<MediaPlayer?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     var showLinkDialog by remember { mutableStateOf(false) }
     var linkTitle by remember { mutableStateOf("") }
