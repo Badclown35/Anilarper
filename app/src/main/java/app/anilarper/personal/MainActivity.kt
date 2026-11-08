@@ -90,7 +90,11 @@ private fun AnilarperApp() {
                 "Home" -> HomeScreen(
                     Modifier.padding(padding), library,
                     onDiscover = { selected = "Discover" },
-                    onOpenLibrary = { selected = "Library" }
+                    onOpenLibrary = { selected = "Library" },
+                    onOpenRead = { selected = "Read" },
+                    onOpenQuests = { selected = "Quests" },
+                    onOpenStats = { selected = "Stats" },
+                    onOpenProfile = { selected = "Profile" }
                 )
                 "Discover" -> DiscoverScreen(Modifier.padding(padding), library.map { it.id }.toSet()) { anime ->
                     library = if (library.any { it.id == anime.id }) library.filterNot { it.id == anime.id }
@@ -169,7 +173,11 @@ private fun HomeScreen(
     modifier: Modifier = Modifier,
     library: List<Anime>,
     onDiscover: () -> Unit,
-    onOpenLibrary: () -> Unit
+    onOpenLibrary: () -> Unit,
+    onOpenRead: () -> Unit,
+    onOpenQuests: () -> Unit,
+    onOpenStats: () -> Unit,
+    onOpenProfile: () -> Unit
 ) {
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -179,7 +187,7 @@ private fun HomeScreen(
                 Text("ANILARPER", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 Text("Your next chapter.", color = White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
             }
-            Box(Modifier.size(42.dp).background(Panel2, CircleShape), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(42.dp).clickable { onOpenProfile() }.background(Panel2, CircleShape), contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.Person, contentDescription = "Profile", tint = Violet)
             }
         }
@@ -264,10 +272,16 @@ private fun HomeScreen(
         SectionTitle("Your space", "Everything in one place")
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             QuickTile("Anime", "Find series", Icons.Default.Tv, Modifier.weight(1f), onDiscover)
-            QuickTile("Manga", "Coming next", Icons.Default.MenuBook, Modifier.weight(1f), onDiscover)
-            QuickTile("Quests", "At your pace", Icons.Default.EmojiEvents, Modifier.weight(1f), onDiscover)
+            QuickTile("Manga", "Browse & read", Icons.Default.MenuBook, Modifier.weight(1f), onOpenRead)
+            QuickTile("Quests", "At your pace", Icons.Default.EmojiEvents, Modifier.weight(1f), onOpenQuests)
         }
-        SectionTitle("A little inspiration", "No pressure. Just discovery.")
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                SectionTitle("Your activity", "See how your collection is growing")
+            }
+            TextButton(onClick = onOpenStats) { Text("View stats", color = Violet) }
+        }
+                SectionTitle("A little inspiration", "No pressure. Just discovery.")
         Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("START WITH WHAT YOU LIKE", color = Violet, fontSize = 10.sp,
