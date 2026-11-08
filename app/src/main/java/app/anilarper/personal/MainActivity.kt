@@ -72,7 +72,7 @@ private fun AnilarperApp() {
                     listOf("Home" to Icons.Default.Home, "Discover" to Icons.Default.Explore,
                         "Library" to Icons.Default.Bookmarks, "More" to Icons.Default.MoreHoriz).forEach { (label, icon) ->
                         NavigationBarItem(
-                            selected = if (label == "More") selected in setOf("Read", "Music", "Quests", "Profile", "Stats", "Backup") else selected == label,
+                            selected = if (label == "More") selected in setOf("Read", "Music", "Quests", "Profile", "Stats", "Backup", "History") else selected == label,
                             onClick = { if (label == "More") moreOpen = true else selected = label },
                             icon = { Icon(icon, contentDescription = label) },
                             label = { Text(label, fontSize = 11.sp, maxLines = 1) },
@@ -122,6 +122,7 @@ private fun AnilarperApp() {
                 "Music" -> MusicScreen(Modifier.padding(padding))
                 "Quests" -> QuestScreen(context, library, readingLibrary, Modifier.padding(padding))
                 "Stats" -> StatisticsScreen(library, readingLibrary, Modifier.padding(padding))
+                "History" -> WatchHistoryScreen(library, Modifier.padding(padding))
                 "Backup" -> BackupScreen(context, Modifier.padding(padding))
                 else -> ProfileScreen(context, library, readingLibrary, Modifier.padding(padding))
             }
@@ -137,6 +138,7 @@ private fun AnilarperApp() {
                         Triple("Music", "Your soundtrack sources", Icons.Default.LibraryMusic),
                         Triple("Quests", "Milestones & XP", Icons.Default.EmojiEvents),
                         Triple("Stats", "Your anime and reading activity", Icons.Default.Insights),
+                        Triple("History", "Recently updated episodes", Icons.Default.History),
                         Triple("Backup", "Export or restore your collection", Icons.Default.Backup),
                         Triple("Profile", "Your personal space", Icons.Default.Person)
                     ).forEach { (label, subtitle, icon) ->
@@ -1070,6 +1072,45 @@ private fun BackupScreen(context: Context, modifier: Modifier = Modifier) {
             },
             dismissButton = { TextButton(onClick = { confirmRestore = null }) { Text("Cancel", color = Muted) } }
         )
+    }
+}
+
+@Composable
+private fun WatchHistoryScreen(library: List<Anime>, modifier: Modifier = Modifier) {
+    val history = library.filter { it.lastWatchedAt > 0L && it.progress > 0 }
+        .sortedByDescending { it.lastWatchedAt }
+    Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+        Spacer(Modifier.height(18.dp))
+        Text("YOUR ACTIVITY", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        Text("Watch history", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text("Anime you've most recently updated.", color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.height(14.dp))
+        if (history.isEmpty()) {
+            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.History, contentDescription = null, tint = Violet, modifier = Modifier.size(32.dp))
+                Text("Your history will appear here.", color = White, fontWeight = FontWeight.SemiBold)
+                Text("Update an anime's watched episode count in your Library to start building your history.",
+                    color = Muted, fontSize = 12.sp)
+            }
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
+                items(history, key = { it.id }) { anime ->
+                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                        AsyncImage(model = anime.cover, contentDescription = anime.title,
+                            modifier = Modifier.width(52.dp).height(70.dp).background(Panel2, RoundedCornerShape(8.dp)))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(anime.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
+                            Text("Episode ${anime.progress}${anime.episodes?.let { " / $it" } ?: ""}",
+                                color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text(android.text.format.DateUtils.getRelativeTimeSpanString(anime.lastWatchedAt).toString(),
+                                color = Muted, fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
