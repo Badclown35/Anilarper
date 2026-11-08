@@ -15,6 +15,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -22,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import app.anilarper.personal.theme.*
 import coil.compose.AsyncImage
 import app.anilarper.personal.data.ReadingSearchViewModel
+import app.anilarper.personal.data.CatalogCacheRepository
 import app.anilarper.personal.ReadingTitle
 
 @Composable
@@ -40,7 +42,9 @@ fun ReadingScreen(
     val loading = searchState.loading
     val error = searchState.error
     val keyboard = LocalSoftwareKeyboardController.current
-    fun search() { searchViewModel.search(query, novels) }
+    val context = LocalContext.current
+    val catalogCache = remember(context) { CatalogCacheRepository(context) }
+    fun search() { searchViewModel.search(query, novels, catalogCache) }
     LaunchedEffect(novels) { search() }
     val visibleSaved = library.filter { it.kind == if (novels) "NOVEL" else "MANGA" }
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
