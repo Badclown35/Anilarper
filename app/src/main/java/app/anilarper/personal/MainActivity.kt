@@ -41,6 +41,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.anilarper.personal.ui.home.HomeScreen
+import app.anilarper.personal.ui.home.DashboardStat
 import app.anilarper.personal.ui.reading.ReadingScreen
 import androidx.lifecycle.ViewModelProvider
 import app.anilarper.personal.data.AnimeLibraryViewModel
