@@ -1,9 +1,14 @@
 package app.anilarper.personal
 
 import android.content.Context
+import android.content.Intent
+import android.media.MediaPlayer
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -53,6 +58,7 @@ private fun AnilarperApp() {
     val context = LocalContext.current
     var selected by remember { mutableStateOf("Home") }
     var library by remember { mutableStateOf(loadLibrary(context)) }
+    var readingLibrary by remember { mutableStateOf(loadReadingLibrary(context)) }
     MaterialTheme(colorScheme = darkColorScheme(
         background = Ink, surface = Panel, primary = Violet,
         onBackground = White, onSurface = White
@@ -62,7 +68,8 @@ private fun AnilarperApp() {
             bottomBar = {
                 NavigationBar(containerColor = Panel) {
                     listOf("Home" to Icons.Default.Home, "Discover" to Icons.Default.Explore,
-                        "Library" to Icons.Default.Bookmarks, "Quests" to Icons.Default.EmojiEvents,
+                        "Library" to Icons.Default.Bookmarks, "Read" to Icons.Default.MenuBook,
+                        "Music" to Icons.Default.LibraryMusic, "Quests" to Icons.Default.EmojiEvents,
                         "Profile" to Icons.Default.Person).forEach { (label, icon) ->
                         NavigationBarItem(
                             selected = selected == label, onClick = { selected = label },
@@ -95,6 +102,23 @@ private fun AnilarperApp() {
                         persistLibrary(context, library)
                     }
                 )
+                "Read" -> ReadingScreen(Modifier.padding(padding), readingLibrary,
+                    onAdd = { title ->
+                        if (readingLibrary.none { it.id == title.id && it.kind == title.kind }) {
+                            readingLibrary = readingLibrary + title
+                            persistReadingLibrary(context, readingLibrary)
+                        }
+                    },
+                    onUpdate = { updated ->
+                        readingLibrary = readingLibrary.map { if (it.id == updated.id && it.kind == updated.kind) updated else it }
+                        persistReadingLibrary(context, readingLibrary)
+                    },
+                    onRemove = { title ->
+                        readingLibrary = readingLibrary.filterNot { it.id == title.id && it.kind == title.kind }
+                        persistReadingLibrary(context, readingLibrary)
+                    }
+                )
+                "Music" -> MusicScreen(Modifier.padding(padding))
                 "Quests" -> ModuleScreen("Nexus quests", "Small goals, on your schedule.",
                     listOf("Explore one new series", "Update an episode count", "Add a manga to your list"), Modifier.padding(padding))
                 else -> ModuleScreen("Your profile", "Your anime identity, stats, and collection.",
@@ -352,6 +376,267 @@ private fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, o
             }
         }
     }
+}
+
+
+@Composable
+private fun ReadingScreen(
+    modifier: Modifier,
+    library: List<ReadingTitle>,
+    onAdd: (ReadingTitle) -> Unit,
+    onUpdate: (ReadingTitle) -> Unit,
+    onRemove: (ReadingTitle) -> Unit
+) {
+    var novels by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<List<ReadingTitle>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val keyboard = LocalSoftwareKeyboardController.current
+    fun search() {
+        scope.launch {
+            loading = true
+            error = null
+            try { results = AniListReadingApi.search(query, novels) }
+            catch (_: Exception) { error = "Catalog unavailable. Check your connection and retry." }
+            finally { loading = false }
+        }
+    }
+    LaunchedEffect(novels) { search() }
+    val visibleSaved = library.filter { it.kind == if (novels) "NOVEL" else "MANGA" }
+    Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+        Spacer(Modifier.height(18.dp))
+        Text("YOUR READING SHELF", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        Text(if (novels) "Light novels." else "Manga.", color = White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+        Text("Track chapters and volumes at your own pace.", color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = !novels, onClick = { novels = false }, label = { Text("Manga") })
+            FilterChip(selected = novels, onClick = { novels = true }, label = { Text("Light novels") })
+        }
+        OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text(if (novels) "Search light novels…" else "Search manga…", color = Muted) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Muted) },
+            singleLine = true, shape = RoundedCornerShape(14.dp),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { keyboard?.hide(); search() }),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Violet, unfocusedBorderColor = Panel2,
+                focusedTextColor = White, unfocusedTextColor = White, cursorColor = Violet))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("YOUR SAVED TITLES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { keyboard?.hide(); search() }) { Text("Search", color = Violet) }
+        }
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 20.dp),
+            modifier = Modifier.weight(1f)) {
+            items(visibleSaved, key = { it.kind + "-" + it.id }) { title ->
+                Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(11.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        AsyncImage(model = title.cover, contentDescription = title.title,
+                            modifier = Modifier.width(54.dp).height(72.dp).background(Panel2, RoundedCornerShape(8.dp)))
+                        Column(Modifier.weight(1f)) {
+                            Text(title.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
+                            Text(title.format + " • " + title.readingStatus, color = Violet, fontSize = 10.sp)
+                            Text(title.progress.toString() + (title.chapters?.let { " / " + it } ?: "") + " chapters",
+                                color = Muted, fontSize = 10.sp)
+                            Text(title.volumeProgress.toString() + (title.volumes?.let { " / " + it } ?: "") + " volumes",
+                                color = Muted, fontSize = 10.sp)
+                        }
+                        IconButton(onClick = { onRemove(title) }) {
+                            Icon(Icons.Default.Close, contentDescription = "Remove title", tint = Muted)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Chapters", color = Muted, fontSize = 11.sp)
+                        Spacer(Modifier.weight(1f))
+                        IconButton(onClick = { onUpdate(title.copy(progress = (title.progress - 1).coerceAtLeast(0))) },
+                            enabled = title.progress > 0) { Icon(Icons.Default.RemoveCircleOutline, null, tint = Violet) }
+                        Text(title.progress.toString(), color = White, fontWeight = FontWeight.Bold)
+                        IconButton(onClick = {
+                            val next = title.progress + 1
+                            onUpdate(title.copy(progress = title.chapters?.let { next.coerceAtMost(it) } ?: next,
+                                readingStatus = if (title.chapters != null && next >= title.chapters) "COMPLETED" else "READING"))
+                        }, enabled = title.chapters == null || title.progress < title.chapters) {
+                            Icon(Icons.Default.AddCircleOutline, null, tint = Violet)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Volumes", color = Muted, fontSize = 11.sp)
+                        Spacer(Modifier.weight(1f))
+                        IconButton(onClick = { onUpdate(title.copy(volumeProgress = (title.volumeProgress - 1).coerceAtLeast(0))) },
+                            enabled = title.volumeProgress > 0) { Icon(Icons.Default.Remove, null, tint = Violet) }
+                        Text(title.volumeProgress.toString(), color = White, fontWeight = FontWeight.Bold)
+                        IconButton(onClick = {
+                            val next = title.volumeProgress + 1
+                            onUpdate(title.copy(volumeProgress = title.volumes?.let { next.coerceAtMost(it) } ?: next))
+                        }, enabled = title.volumes == null || title.volumeProgress < title.volumes) {
+                            Icon(Icons.Default.Add, null, tint = Violet)
+                        }
+                    }
+                }
+            }
+            item { Text("DISCOVER", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
+            if (loading) item { Box(Modifier.fillMaxWidth().padding(18.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Violet)
+            } }
+            error?.let { message -> item { Text(message, color = Muted, fontSize = 12.sp) } }
+            items(results, key = { "result-" + it.kind + "-" + it.id }) { title ->
+                val saved = library.any { it.id == title.id && it.kind == title.kind }
+                Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(13.dp)).padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AsyncImage(model = title.cover, contentDescription = title.title,
+                        modifier = Modifier.width(52.dp).height(70.dp).background(Panel2, RoundedCornerShape(8.dp)))
+                    Column(Modifier.weight(1f)) {
+                        Text(title.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 2)
+                        Text(title.format + " • " + (title.chapters?.let { it.toString() + " chapters" } ?: "Chapter count unknown"),
+                            color = Muted, fontSize = 10.sp)
+                        Text(title.volumes?.let { it.toString() + " volumes" } ?: "Volumes unknown", color = Muted, fontSize = 10.sp)
+                    }
+                    IconButton(onClick = { if (!saved) onAdd(title) }, enabled = !saved) {
+                        Icon(if (saved) Icons.Default.CheckCircle else Icons.Default.AddCircle,
+                            contentDescription = if (saved) "Saved" else "Add to reading shelf",
+                            tint = if (saved) Violet else White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MusicScreen(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var tracks by remember { mutableStateOf(loadTracks(context)) }
+    var current by remember { mutableStateOf<String?>(null) }
+    var playing by remember { mutableStateOf(false) }
+    var player by remember { mutableStateOf<MediaPlayer?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            val track = LocalTrack(uri.toString(), uri.lastPathSegment?.substringAfterLast('/')?.substringBefore('?') ?: "Audio track")
+            if (tracks.none { it.uri == track.uri }) {
+                tracks = tracks + track
+                persistTracks(context, tracks)
+            }
+            message = "Added to your local soundtrack library."
+        }
+    }
+    DisposableEffect(player) { onDispose { player?.release() } }
+    Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+        Spacer(Modifier.height(20.dp))
+        Text("ANILARPER AUDIO", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        Text("Your soundtrack shelf.", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text("Play audio files you have access to on this device.", color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.height(16.dp))
+        Button(onClick = { picker.launch(arrayOf("audio/*")) },
+            colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = Ink),
+            shape = RoundedCornerShape(13.dp)) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(Modifier.width(6.dp))
+            Text("Add audio files", fontWeight = FontWeight.Bold)
+        }
+        message?.let { Text(it, color = Violet, fontSize = 11.sp) }
+        if (tracks.isEmpty()) {
+            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.MusicNote, contentDescription = null, tint = Violet, modifier = Modifier.size(34.dp))
+                Text("Your soundtrack library is empty.", color = White, fontWeight = FontWeight.SemiBold)
+                Text("Add audio files stored on your phone. Anilarper saves file references, not copies of audio.",
+                    color = Muted, fontSize = 12.sp)
+            }
+        } else {
+            Text("YOUR TRACKS", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 14.dp),
+                modifier = Modifier.weight(1f)) {
+                items(tracks, key = { it.uri }) { track ->
+                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(13.dp)).clickable {
+                        if (current == track.uri && player != null) {
+                            if (playing) { player?.pause(); playing = false }
+                            else { player?.start(); playing = true }
+                        } else {
+                            runCatching {
+                                val next = MediaPlayer.create(context, Uri.parse(track.uri)) ?: error("Audio file couldn't be opened.")
+                                next.setOnCompletionListener { playing = false }
+                                player = next
+                                current = track.uri
+                                next.start()
+                                playing = true
+                                message = null
+                            }.onFailure { message = it.message ?: "Unable to play this file." }
+                        }
+                    }.padding(13.dp), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Icon(if (current == track.uri && playing) Icons.Default.PauseCircle else Icons.Default.PlayCircle,
+                            contentDescription = "Play " + track.title, tint = Violet, modifier = Modifier.size(30.dp))
+                        Text(track.title, color = White, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 2)
+                        IconButton(onClick = {
+                            if (current == track.uri) { player?.release(); player = null; current = null; playing = false }
+                            tracks = tracks.filterNot { it.uri == track.uri }
+                            persistTracks(context, tracks)
+                        }) { Icon(Icons.Default.DeleteOutline, contentDescription = "Remove track", tint = Muted) }
+                    }
+                }
+            }
+        }
+        if (current != null) {
+            Row(Modifier.fillMaxWidth().background(Panel2, RoundedCornerShape(14.dp)).padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("NOW PLAYING", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    Text(tracks.firstOrNull { it.uri == current }?.title ?: "Audio track", color = White, fontSize = 12.sp, maxLines = 1)
+                }
+                IconButton(onClick = {
+                    if (playing) { player?.pause(); playing = false }
+                    else { player?.start(); playing = true }
+                }) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause", tint = Violet) }
+                IconButton(onClick = { player?.seekTo(0); if (!playing) { player?.start(); playing = true } }) {
+                    Icon(Icons.Default.Replay, contentDescription = "Restart track", tint = Violet)
+                }
+            }
+        }
+    }
+}
+
+private data class LocalTrack(val uri: String, val title: String)
+
+private fun loadTracks(context: Context): List<LocalTrack> = try {
+    val array = JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("tracks", "[]") ?: "[]")
+    (0 until array.length()).map { i ->
+        val item = array.getJSONObject(i)
+        LocalTrack(item.getString("uri"), item.getString("title"))
+    }
+} catch (_: Exception) { emptyList() }
+
+private fun persistTracks(context: Context, tracks: List<LocalTrack>) {
+    val array = JSONArray()
+    tracks.forEach { array.put(JSONObject().put("uri", it.uri).put("title", it.title)) }
+    context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putString("tracks", array.toString()).apply()
+}
+
+private fun loadReadingLibrary(context: Context): List<ReadingTitle> = try {
+    val array = JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("readingLibrary", "[]") ?: "[]")
+    (0 until array.length()).map { i ->
+        val o = array.getJSONObject(i)
+        ReadingTitle(o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
+            o.optString("format"), o.optString("status"), if (o.isNull("chapters")) null else o.optInt("chapters"),
+            if (o.isNull("volumes")) null else o.optInt("volumes"), o.optString("description"),
+            o.optString("kind", "MANGA"), o.optInt("progress"), o.optInt("volumeProgress"), o.optString("readingStatus", "PLANNING"))
+    }
+} catch (_: Exception) { emptyList() }
+
+private fun persistReadingLibrary(context: Context, library: List<ReadingTitle>) {
+    val array = JSONArray()
+    library.forEach { item ->
+        array.put(JSONObject().put("id", item.id).put("title", item.title).put("nativeTitle", item.nativeTitle)
+            .put("cover", item.cover).put("format", item.format).put("status", item.status)
+            .put("chapters", item.chapters).put("volumes", item.volumes).put("description", item.description)
+            .put("kind", item.kind).put("progress", item.progress).put("volumeProgress", item.volumeProgress)
+            .put("readingStatus", item.readingStatus))
+    }
+    context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putString("readingLibrary", array.toString()).apply()
 }
 
 @Composable
