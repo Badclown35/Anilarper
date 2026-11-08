@@ -2,7 +2,7 @@
 
 A personal, native Android anime, manga, light-novel, and soundtrack companion built around rediscovery, tracking, and low-pressure exploration.
 
-## Current build: 0.9.0 (development)
+## Current build: 1.0.0 (development)
 
 - Kotlin + Jetpack Compose; modern dark interface with violet accents
 - Home, Discover, Library, Read, Music, Quests, and Profile sections
@@ -29,7 +29,8 @@ A personal, native Android anime, manga, light-novel, and soundtrack companion b
 - Soundtrack files are not copied into the app; Anilarper stores references to files selected by the user.
 - No AniList sign-in is required for local tracking.
 - The app does not host or distribute copyrighted anime episodes, books, or music.
-- The current music player is in-app playback; background playback and streaming-service integrations are not implemented yet.
+- Local audio playback is intended for user-selected files, but a device test has reported that playback is not working; this remains an open issue.
+- Streaming-service bookmarks open official apps/sites and do not provide in-app streaming.
 
 ## Build
 
@@ -81,13 +82,20 @@ Streaming links are bookmarks/launch points; they are not downloaded or re-hoste
 - Clearly labels potentially incomplete results because upstream relationship metadata is not guaranteed to be exhaustive.
 
 
-## 0.9.0 — Personalization & Playback (in progress)
+## 0.9.0 — Personalization & Playback (incomplete; carried forward)
 
-- Continue Watching surfaces anime marked as currently watching with saved episode progress.
-- Watch History lists recently updated anime progress.
-- Statistics estimate viewing time from recorded episode progress.
-- Local music playback now includes persisted shuffle and repeat-one controls.
-- Shuffle changes the visible local track order for the current app session; the original library order is retained on disk.
-- Repeat-one loops the current local audio file. Streaming-service links remain official external app/site launch points.
+- Continue Watching and Watch History were added, but device testing found the Continue Watching experience was not appearing as expected.
+- Shuffle and repeat-one controls were added, but local music playback was reported as nonfunctional during device testing.
+- Background playback, full queue management, named playlists, and Profile 2.0 are not complete.
 
-Background playback, full queue management, named playlists, and Profile 2.0 remain planned work and are not included yet.
+## 1.0.0 — Official Release (development)
+
+- Home dashboard refresh: visible Continue Watching empty state, active Watching titles, collection counts, and recently completed titles.
+- Continue Watching entries open the Library so episode progress can be updated.
+- Planned remaining work: consistent UI polish, franchise relationship cleanup, offline/error handling, backup reliability, profile and dashboard customization, accessibility, privacy review, and final device testing.
+
+## Known issues carried into 1.0.0
+
+- Local music playback needs diagnosis on a real device.
+- Franchise traversal can include loose AniList relationships such as character appearances or special/crossover links; the map needs stricter relationship grouping.
+- Continue Watching now has a visible empty state and includes all titles marked Watching, but still needs end-to-end device validation.
