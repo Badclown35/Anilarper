@@ -27,6 +27,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import app.anilarper.personal.theme.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,17 +61,6 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal val Ink = Color(0xFF0C0D12)
-internal val Panel = Color(0xFF171923)
-internal val Panel2 = Color(0xFF202331)
-private val AccentPalette = listOf(
-    Color(0xFF9B8CFF), Color(0xFF72C8D8), Color(0xFFFF9FBD), Color(0xFFFFC36E), Color(0xFF91CFA5)
-)
-internal val VioletState = mutableStateOf(AccentPalette.first())
-internal val Violet: Color get() = VioletState.value
-internal val Muted = Color(0xFF9A9EAE)
-internal val White = Color(0xFFF4F3FA)
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,10 +89,7 @@ private fun AnilarperApp() {
         val accent = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getInt("profileAccent", 0)
         VioletState.value = AccentPalette[accent.coerceIn(0, AccentPalette.lastIndex)]
     }
-    MaterialTheme(colorScheme = darkColorScheme(
-        background = Ink, surface = Panel, primary = Violet,
-        onBackground = White, onSurface = White
-    )) {
+    AnilarperTheme {
         Scaffold(
             containerColor = Ink,
             bottomBar = {
