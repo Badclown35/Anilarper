@@ -94,37 +94,52 @@ object AniListApi {
                 info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
         }
 
-    suspend fun franchise(id: Int, maxTitles: Int = 80): FranchiseResult = withContext(Dispatchers.IO) {
+    suspend fun franchise(id: Int, maxTitles: Int = 80): FranchiseResult {
         val root = details(id)
-        val found = linkedMapOf<Int, AnimeRelation>()
-        val scanned = mutableSetOf<Int>()
-        var frontier = root.relations.map { it.anime.id to it.relation }.filter { it.first != id }
-        var rounds = 0
-        while (frontier.isNotEmpty() && found.size < maxTitles && rounds < 4) {
-            val next = frontier.filter { (entryId, _) ->
-                entryId != id && entryId !in scanned && entryId !in found
-            }.distinctBy { it.first }.take(maxTitles - found.size)
-            if (next.isEmpty()) break
-            val fetched = mutableListOf<Anime>()
-            for (batch in next.map { it.first }.chunked(20)) {
-                fetched += fetchAnimeBatch(batch)
-            }
-            val relationById = next.toMap()
-            fetched.forEach { anime ->
-                scanned += anime.id
-                if (anime.id != id) {
-                    found.putIfAbsent(anime.id, AnimeRelation(relationById[anime.id] ?: "RELATED", anime))
-                }
-            }
-            frontier = fetched.flatMap { parent ->
-                parent.relations.map { it.anime.id to it.relation }
-            }
-            rounds++
-        }
-        val partial = frontier.any { it.first != id && it.first !in scanned && it.first !in found } ||
-            found.size >= maxTitles
-        FranchiseResult(root, found.values.sortedWith(compareBy<AnimeRelation>({ franchiseOrder(it.relation) }, { it.anime.seasonYear ?: 9999 }, { it.anime.title.lowercase() })), partial, scanned.size)
+        return franchise(id, root, maxTitles)
     }
+
+    // Scan from the already available search result so a details-request failure
+    // does not prevent the franchise map from loading.
+    suspend fun franchise(id: Int, root: Anime, maxTitles: Int = 80): FranchiseResult =
+        withContext(Dispatchers.IO) {
+            val found = linkedMapOf<Int, AnimeRelation>()
+            val scanned = mutableSetOf<Int>()
+            var frontier = root.relations.map { it.anime.id to it.relation }.filter { it.first != id }
+            var rounds = 0
+            var partial = false
+            while (frontier.isNotEmpty() && found.size < maxTitles && rounds < 4) {
+                val next = frontier.filter { (entryId, _) ->
+                    entryId != id && entryId !in scanned && entryId !in found
+                }.distinctBy { it.first }.take(maxTitles - found.size)
+                if (next.isEmpty()) break
+                val relationById = next.toMap()
+                val fetchedThisRound = mutableListOf<Anime>()
+                for (batch in next.map { it.first }.chunked(20)) {
+                    try {
+                        fetchedThisRound += fetchAnimeBatch(batch)
+                    } catch (_: Exception) {
+                        // Keep already fetched entries and mark the map as partial.
+                        partial = true
+                    }
+                }
+                fetchedThisRound.forEach { anime ->
+                    scanned += anime.id
+                    if (anime.id != id) {
+                        found.putIfAbsent(anime.id, AnimeRelation(relationById[anime.id] ?: "RELATED", anime))
+                    }
+                }
+                frontier = fetchedThisRound.flatMap { parent ->
+                    parent.relations.map { it.anime.id to it.relation }
+                }
+                rounds++
+            }
+            if (frontier.any { it.first != id && it.first !in scanned && it.first !in found }) partial = true
+            if (found.size >= maxTitles) partial = true
+            FranchiseResult(root, found.values.sortedWith(compareBy<AnimeRelation>(
+                { franchiseOrder(it.relation) }, { it.anime.seasonYear ?: 9999 }, { it.anime.title.lowercase() }
+            )), partial, scanned.size)
+        }
 
     private fun franchiseOrder(relation: String): Int = when (relation) {
         "PREQUEL" -> 0
