@@ -213,91 +213,194 @@ private fun HomeScreen(modifier: Modifier = Modifier, onDiscover: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, onToggleSaved: (Anime) -> Unit) {
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Anime>>(emptyList()) }
+    var page by remember { mutableIntStateOf(1) }
+    var hasNext by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
+    var loadingMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedAnime by remember { mutableStateOf<Anime?>(null) }
+    var detail by remember { mutableStateOf<Anime?>(null) }
+    var detailLoading by remember { mutableStateOf(false) }
+    var detailError by remember { mutableStateOf<String?>(null) }
+    var genre by remember { mutableStateOf<String?>(null) }
+    var format by remember { mutableStateOf<String?>(null) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var season by remember { mutableStateOf<String?>(null) }
+    var seasonYear by remember { mutableIntStateOf(2026) }
+    var sort by remember { mutableStateOf("TRENDING_DESC") }
+    var filterMenu by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
 
-    fun search(term: String) {
+    fun load(reset: Boolean = true) {
         scope.launch {
-            loading = true
+            if (reset) { loading = true; page = 1; hasNext = false } else loadingMore = true
             error = null
-            try { results = AniListApi.search(term) }
-            catch (_: Exception) { error = "Couldn't reach AniList. Check your connection and try again." }
-            finally { loading = false }
+            try {
+                val nextPage = if (reset) 1 else page + 1
+                val fetched = AniListApi.search(query, nextPage,
+                    AnimeFilters(genre, format, status, season, if (season == null) null else seasonYear, sort))
+                results = if (reset) fetched.items else (results + fetched.items).distinctBy { it.id }
+                page = fetched.page
+                hasNext = fetched.hasNextPage
+            } catch (e: Exception) {
+                error = if (e.message?.contains("rate", true) == true)
+                    "AniList is receiving too many requests. Wait a moment, then retry."
+                else "Couldn't load anime. Check your connection and try again."
+            } finally { loading = false; loadingMore = false }
         }
     }
-    LaunchedEffect(Unit) { search("") }
+    LaunchedEffect(Unit) { load() }
+    LaunchedEffect(selectedAnime?.id) {
+        val selected = selectedAnime ?: return@LaunchedEffect
+        detail = null
+        detailError = null
+        detailLoading = true
+        try { detail = AniListApi.details(selected.id) }
+        catch (_: Exception) { detailError = "Extra details couldn't be loaded. The catalog summary is still available." }
+        finally { detailLoading = false }
+    }
 
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(16.dp))
         Text("DISCOVER", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
         Text("Find your next watch.", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-        Text("Search the catalog or explore what's trending.", color = Muted, fontSize = 12.sp)
-        Spacer(Modifier.height(14.dp))
-        OutlinedTextField(
-            value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(),
+        Text("Browse seasons, filter the catalog, and follow connected titles.", color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("Search anime titles…", color = Muted) },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Muted) },
-            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = ""; search("") }) {
+            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = ""; keyboard?.hide(); load() }) {
                 Icon(Icons.Default.Close, contentDescription = "Clear")
             } },
-            singleLine = true, shape = RoundedCornerShape(16.dp),
+            singleLine = true, shape = RoundedCornerShape(14.dp),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { keyboard?.hide(); search(query) }),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Violet, unfocusedBorderColor = Panel2,
-                focusedTextColor = White, unfocusedTextColor = White, cursorColor = Violet
+            keyboardActions = KeyboardActions(onSearch = { keyboard?.hide(); load() }),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Violet,
+                unfocusedBorderColor = Panel2, focusedTextColor = White,
+                unfocusedTextColor = White, cursorColor = Violet))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 7.dp)) {
+            val filters = listOf(
+                Triple("Genre", genre ?: "Genre", listOf("Action","Adventure","Comedy","Drama","Fantasy","Horror","Mystery","Romance","Sci-Fi","Slice of Life","Sports","Supernatural","Thriller")),
+                Triple("Format", format?.replace('_',' ') ?: "Format", listOf("TV","TV_SHORT","MOVIE","SPECIAL","OVA","ONA")),
+                Triple("Status", status?.replace('_',' ') ?: "Status", listOf("RELEASING","FINISHED","NOT_YET_RELEASED","CANCELLED","HIATUS")),
+                Triple("Season", season ?: "Season", listOf("WINTER","SPRING","SUMMER","FALL")),
+                Triple("Sort", when(sort) { "SCORE_DESC" -> "Top score"; "POPULARITY_DESC" -> "Popular"; "START_DATE_DESC" -> "Newest"; else -> "Trending" },
+                    listOf("TRENDING_DESC","POPULARITY_DESC","SCORE_DESC","START_DATE_DESC"))
             )
-        )
+            filters.forEach { (key, label, options) ->
+                Box {
+                    FilterChip(selected = (key == "Genre" && genre != null) || (key == "Format" && format != null) ||
+                        (key == "Status" && status != null) || (key == "Season" && season != null) ||
+                        (key == "Sort" && sort != "TRENDING_DESC"),
+                        onClick = { filterMenu = if (filterMenu == key) "" else key },
+                        label = { Text(label, maxLines = 1, fontSize = 10.sp) })
+                    DropdownMenu(expanded = filterMenu == key, onDismissRequest = { filterMenu = "" }) {
+                        if (key != "Sort") DropdownMenuItem(text = { Text("Any " + key.lowercase()) }, onClick = {
+                            when(key) { "Genre" -> genre = null; "Format" -> format = null; "Status" -> status = null; "Season" -> season = null }
+                            filterMenu = ""; load()
+                        })
+                        options.forEach { option -> DropdownMenuItem(text = { Text(option.replace('_',' ')) }, onClick = {
+                            when(key) {
+                                "Genre" -> genre = option
+                                "Format" -> format = option
+                                "Status" -> status = option
+                                "Season" -> season = option
+                                "Sort" -> sort = option
+                            }
+                            filterMenu = ""; load()
+                        }) }
+                    }
+                }
+            }
+        }
+        if (season != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Year", color = Muted, fontSize = 11.sp)
+                TextButton(onClick = { seasonYear = (seasonYear - 1).coerceAtLeast(1970); load() }) { Text("−", color = Violet) }
+                Text(seasonYear.toString(), color = White, fontWeight = FontWeight.Bold)
+                TextButton(onClick = { seasonYear = (seasonYear + 1).coerceAtMost(2035); load() }) { Text("+", color = Violet) }
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (query.isBlank()) "TRENDING NOW" else "SEARCH RESULTS", color = Violet,
-                fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+            Text(if (query.isBlank()) "CATALOG" else "SEARCH RESULTS", color = Violet,
+                fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = { keyboard?.hide(); search(query) }) { Text("Search", color = Violet) }
+            TextButton(onClick = { keyboard?.hide(); load() }) { Text("Apply", color = Violet) }
         }
         when {
             loading -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Violet)
             }
-            error != null -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+            error != null && results.isEmpty() -> Column(Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(error!!, color = Muted)
+                TextButton(onClick = { load() }) { Text("Retry", color = Violet) }
             }
-            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(bottom = 18.dp), modifier = Modifier.weight(1f)) {
+            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp),
+                contentPadding = PaddingValues(bottom = 20.dp), modifier = Modifier.weight(1f)) {
                 items(results, key = { it.id }) { anime ->
                     AnimeRow(anime, savedIds.contains(anime.id)) { selectedAnime = anime }
+                }
+                if (error != null) item { Text(error!!, color = Muted, fontSize = 11.sp) }
+                if (hasNext) item {
+                    Button(onClick = { load(false) }, enabled = !loadingMore, modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Panel2, contentColor = Violet)) {
+                        if (loadingMore) CircularProgressIndicator(modifier = Modifier.size(17.dp), color = Violet)
+                        else Text("Load more anime")
+                    }
                 }
             }
         }
     }
     selectedAnime?.let { anime ->
-        AlertDialog(
-            onDismissRequest = { selectedAnime = null },
-            containerColor = Panel2,
-            title = { Text(anime.title, color = White, fontWeight = FontWeight.Bold) },
+        val shown = detail ?: anime
+        AlertDialog(onDismissRequest = { selectedAnime = null }, containerColor = Panel2,
+            title = { Text(shown.title, color = White, fontWeight = FontWeight.Bold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AsyncImage(model = anime.cover, contentDescription = anime.title,
-                        modifier = Modifier.fillMaxWidth().height(170.dp))
-                    Text("${anime.format} • ${anime.status}", color = Violet, fontSize = 12.sp)
-                    Text("${anime.episodes?.let { "$it episodes" } ?: "Episode count unknown"} • ${anime.score?.let { "$it% score" } ?: "Not rated"}",
+                Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AsyncImage(model = shown.cover, contentDescription = shown.title,
+                        modifier = Modifier.fillMaxWidth().height(180.dp))
+                    Text(listOfNotNull(shown.format, shown.status,
+                        shown.season.takeIf { it.isNotBlank() }?.lowercase()?.replaceFirstChar { it.uppercase() },
+                        shown.seasonYear?.toString()).joinToString(" • "), color = Violet, fontSize = 11.sp)
+                    Text("${shown.episodes?.let { "${it} episodes" } ?: "Episode count unknown"} • ${shown.score?.let { "${it}% score" } ?: "Not rated"}",
                         color = Muted, fontSize = 11.sp)
-                    Text(anime.description.ifBlank { "No synopsis available." }, color = Muted, fontSize = 12.sp, maxLines = 6)
+                    if (shown.genres.isNotEmpty()) Text(shown.genres.joinToString(" • "), color = Violet, fontSize = 11.sp)
+                    if (shown.studios.isNotEmpty()) Text("Studio: ${shown.studios.joinToString()}", color = Muted, fontSize = 11.sp)
+                    Text(shown.description.ifBlank { "No synopsis available." }, color = Muted, fontSize = 12.sp)
+                    if (detailLoading) CircularProgressIndicator(color = Violet, modifier = Modifier.size(20.dp))
+                    detailError?.let { Text(it, color = Muted, fontSize = 10.sp) }
+                    if (shown.relations.isNotEmpty()) {
+                        Divider(color = Panel)
+                        Text("CONNECTED TITLES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        shown.relations.forEach { relation ->
+                            Row(Modifier.fillMaxWidth().clickable { selectedAnime = relation.anime }
+                                .background(Panel, RoundedCornerShape(10.dp)).padding(9.dp),
+                                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                                AsyncImage(model = relation.anime.cover, contentDescription = null,
+                                    modifier = Modifier.size(width = 42.dp, height = 56.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(relation.anime.title, color = White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    Text(relation.relation.replace('_',' ').lowercase().replaceFirstChar { it.uppercase() },
+                                        color = Violet, fontSize = 10.sp)
+                                }
+                                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
+                            }
+                        }
+                    }
                 }
             },
-            confirmButton = {
-                TextButton(onClick = { onToggleSaved(anime) }) {
-                    Text(if (savedIds.contains(anime.id)) "Remove from library" else "Add to library", color = Violet)
-                }
-            },
-            dismissButton = { TextButton(onClick = { selectedAnime = null }) { Text("Close", color = Muted) } }
-        )
+            confirmButton = { TextButton(onClick = { onToggleSaved(shown) }) {
+                Text(if (savedIds.contains(shown.id)) "Remove from library" else "Add to library", color = Violet)
+            } },
+            dismissButton = { TextButton(onClick = { selectedAnime = null }) { Text("Close", color = Muted) } })
     }
 }
 
