@@ -85,10 +85,16 @@ private fun AnilarperApp() {
                     else library + anime
                     persistLibrary(context, library)
                 }
-                "Library" -> LibraryScreen(Modifier.padding(padding), library) { anime ->
-                    library = library.filterNot { it.id == anime.id }
-                    persistLibrary(context, library)
-                }
+                "Library" -> LibraryScreen(Modifier.padding(padding), library,
+                    onRemove = { anime ->
+                        library = library.filterNot { it.id == anime.id }
+                        persistLibrary(context, library)
+                    },
+                    onUpdate = { updated ->
+                        library = library.map { if (it.id == updated.id) updated else it }
+                        persistLibrary(context, library)
+                    }
+                )
                 "Quests" -> ModuleScreen("Nexus quests", "Small goals, on your schedule.",
                     listOf("Explore one new series", "Update an episode count", "Add a manga to your list"), Modifier.padding(padding))
                 else -> ModuleScreen("Your profile", "Your anime identity, stats, and collection.",
@@ -269,12 +275,12 @@ private fun AnimeRow(anime: Anime, saved: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, onRemove: (Anime) -> Unit) {
+private fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, onRemove: (Anime) -> Unit, onUpdate: (Anime) -> Unit) {
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(20.dp))
         Text("YOUR LIBRARY", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
         Text("Saved for later.", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-        Text("${library.size} saved anime", color = Muted, fontSize = 12.sp)
+        Text("${library.size} saved anime • ${library.count { it.watchStatus == "COMPLETED" }} completed", color = Muted, fontSize = 12.sp)
         Spacer(Modifier.height(16.dp))
         if (library.isEmpty()) {
             Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(20.dp),
@@ -286,14 +292,60 @@ private fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, o
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
                 items(library, key = { it.id }) { anime ->
-                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        AsyncImage(model = anime.cover, contentDescription = anime.title,
-                            modifier = Modifier.width(52.dp).height(70.dp).background(Panel2, RoundedCornerShape(8.dp)))
-                        Text(anime.title, color = White, fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.weight(1f), fontSize = 13.sp)
-                        IconButton(onClick = { onRemove(anime) }) {
-                            Icon(Icons.Default.BookmarkRemove, contentDescription = "Remove", tint = Muted)
+                    Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            AsyncImage(model = anime.cover, contentDescription = anime.title,
+                                modifier = Modifier.width(58.dp).height(76.dp).background(Panel2, RoundedCornerShape(8.dp)))
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(anime.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
+                                Text(anime.watchStatus.replace('_', ' '), color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text(if (anime.episodes != null) "${anime.progress} / ${anime.episodes} episodes" else "${anime.progress} episodes tracked",
+                                    color = Muted, fontSize = 11.sp)
+                            }
+                            IconButton(onClick = { onRemove(anime) }) {
+                                Icon(Icons.Default.BookmarkRemove, contentDescription = "Remove", tint = Muted)
+                            }
+                        }
+                        if (anime.episodes != null && anime.episodes > 0) {
+                            LinearProgressIndicator(
+                                progress = { (anime.progress.toFloat() / anime.episodes).coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth().height(5.dp),
+                                color = Violet, trackColor = Panel2
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Episodes watched", color = Muted, fontSize = 11.sp)
+                            Spacer(Modifier.weight(1f))
+                            IconButton(onClick = { onUpdate(anime.copy(progress = (anime.progress - 1).coerceAtLeast(0))) },
+                                enabled = anime.progress > 0) {
+                                Icon(Icons.Default.RemoveCircleOutline, contentDescription = "Decrease episode", tint = Violet)
+                            }
+                            Text(anime.progress.toString(), color = White, fontWeight = FontWeight.Bold)
+                            IconButton(onClick = {
+                                val next = anime.progress + 1
+                                val capped = anime.episodes?.let { next.coerceAtMost(it) } ?: next
+                                onUpdate(anime.copy(progress = capped,
+                                    watchStatus = if (anime.episodes != null && capped >= anime.episodes) "COMPLETED" else "WATCHING"))
+                            }, enabled = anime.episodes == null || anime.progress < anime.episodes) {
+                                Icon(Icons.Default.AddCircleOutline, contentDescription = "Increase episode", tint = Violet)
+                            }
+                        }
+                        var statusExpanded by remember(anime.id) { mutableStateOf(false) }
+                        Box {
+                            TextButton(onClick = { statusExpanded = true }) {
+                                Text("Change status", color = Violet, fontSize = 11.sp)
+                                Icon(Icons.Default.ExpandMore, contentDescription = null, tint = Violet)
+                            }
+                            DropdownMenu(expanded = statusExpanded, onDismissRequest = { statusExpanded = false }) {
+                                listOf("PLANNING", "WATCHING", "COMPLETED", "PAUSED", "DROPPED").forEach { status ->
+                                    DropdownMenuItem(text = { Text(status.replace('_', ' ')) },
+                                        onClick = {
+                                            statusExpanded = false
+                                            onUpdate(anime.copy(watchStatus = status))
+                                        })
+                                }
+                            }
                         }
                     }
                 }
@@ -356,7 +408,8 @@ private fun loadLibrary(context: Context): List<Anime> = try {
         Anime(o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
             o.optString("format"), o.optString("status"),
             if (o.isNull("episodes")) null else o.optInt("episodes"),
-            if (o.isNull("score")) null else o.optInt("score"), o.optString("description"))
+            if (o.isNull("score")) null else o.optInt("score"), o.optString("description"),
+            o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0))
     }
 } catch (_: Exception) { emptyList() }
 
@@ -365,7 +418,8 @@ private fun persistLibrary(context: Context, library: List<Anime>) {
     library.forEach { a ->
         array.put(JSONObject().put("id", a.id).put("title", a.title).put("nativeTitle", a.nativeTitle)
             .put("cover", a.cover).put("format", a.format).put("status", a.status)
-            .put("episodes", a.episodes).put("score", a.score).put("description", a.description))
+            .put("episodes", a.episodes).put("score", a.score).put("description", a.description)
+            .put("watchStatus", a.watchStatus).put("progress", a.progress))
     }
     context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit()
         .putString("library", array.toString()).apply()
