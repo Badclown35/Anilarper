@@ -1134,10 +1134,12 @@ private fun StatisticsScreen(library: List<Anime>, readingLibrary: List<ReadingT
             ProfileStat("Episodes", episodes.toString(), Modifier.weight(1f))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            ProfileStat("Watch time", if (estimatedHours < 1) "<1 hr" else "$estimatedHours hrs", Modifier.weight(1f))
             ProfileStat("Completed", completed.toString(), Modifier.weight(1f))
             ProfileStat("Watching", watching.toString(), Modifier.weight(1f))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             ProfileStat("Planning", planning.toString(), Modifier.weight(1f))
+            ProfileStat("Est. watch time", if (estimatedHours < 1) "<1 hr" else "$estimatedHours hrs", Modifier.weight(1f))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             ProfileStat("Manga", manga.toString(), Modifier.weight(1f))
