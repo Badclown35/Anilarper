@@ -30,6 +30,9 @@ interface CollectionDao {
     @Query("SELECT * FROM collection_items WHERE collectionType = :type ORDER BY position ASC")
     fun observeCollection(type: String): Flow<List<CollectionEntity>>
 
+    @Query("SELECT * FROM collection_items WHERE collectionType = :type ORDER BY position ASC")
+    suspend fun getCollectionOnce(type: String): List<CollectionEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<CollectionEntity>)
 
