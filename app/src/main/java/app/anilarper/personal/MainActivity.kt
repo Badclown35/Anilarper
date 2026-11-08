@@ -10,7 +10,6 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -29,7 +28,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -47,6 +45,11 @@ import androidx.lifecycle.ViewModelProvider
 import app.anilarper.personal.data.AnimeLibraryViewModel
 import app.anilarper.personal.data.ReadingLibraryViewModel
 import app.anilarper.personal.data.CollectionViewModelFactory
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
@@ -76,11 +79,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AnilarperApp() {
     val context = LocalContext.current
-    var selected by rememberSaveable { mutableStateOf("Home") }
+    val navController = rememberNavController()
+    val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route ?: "Home"
     var moreOpen by remember { mutableStateOf(false) }
-    BackHandler(enabled = selected != "Home" || moreOpen) {
-        if (moreOpen) moreOpen = false else selected = "Home"
-    }
     val activity = context as ComponentActivity
     val collectionFactory = remember(context) { CollectionViewModelFactory(context.applicationContext) }
     val animeViewModel = remember(activity) {
@@ -105,13 +106,23 @@ private fun AnilarperApp() {
                 NavigationBar(containerColor = Color(0xFF11131B), tonalElevation = 0.dp) {
                     listOf("Home" to Icons.Default.Home, "Discover" to Icons.Default.Explore,
                         "Library" to Icons.Default.Bookmarks, "More" to Icons.Default.MoreHoriz).forEach { (label, icon) ->
+                        val isSelected = if (label == "More")
+                            currentRoute in setOf("Read", "Music", "Quests", "Profile", "Stats", "Backup", "History")
+                        else currentRoute == label
                         NavigationBarItem(
-                            selected = if (label == "More") selected in setOf("Read", "Music", "Quests", "Profile", "Stats", "Backup", "History") else selected == label,
-                            onClick = { if (label == "More") moreOpen = true else selected = label },
+                            selected = isSelected,
+                            onClick = {
+                                if (label == "More") moreOpen = true
+                                else navController.navigate(label) {
+                                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
                             icon = { Icon(icon, contentDescription = label,
-                                modifier = Modifier.size(if (selected == label) 23.dp else 21.dp)) },
+                                modifier = Modifier.size(if (isSelected) 23.dp else 21.dp)) },
                             label = { Text(label, fontSize = 10.sp,
-                                fontWeight = if (selected == label) FontWeight.Bold else FontWeight.Medium, maxLines = 1) },
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium, maxLines = 1) },
                             alwaysShowLabel = true,
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = Violet, selectedTextColor = Violet,
@@ -124,49 +135,46 @@ private fun AnilarperApp() {
                 }
             }
         ) { padding ->
-            when (selected) {
-                "Home" -> HomeScreen(
-                    Modifier.padding(padding), library,
-                    onDiscover = { selected = "Discover" },
-                    onOpenLibrary = { selected = "Library" },
-                    onOpenRead = { selected = "Read" },
-                    onOpenQuests = { selected = "Quests" },
-                    onOpenStats = { selected = "Stats" },
-                    onOpenProfile = { selected = "Profile" }
-                )
-                "Discover" -> DiscoverScreen(Modifier.padding(padding), library.map { it.id }.toSet()) { anime ->
-                    animeViewModel.toggle(anime)
+            NavHost(navController = navController, startDestination = "Home", modifier = Modifier.padding(padding)) {
+                composable("Home") {
+                    HomeScreen(Modifier.fillMaxSize(), library,
+                        onDiscover = { navController.navigate("Discover") { launchSingleTop = true } },
+                        onOpenLibrary = { navController.navigate("Library") { launchSingleTop = true } },
+                        onOpenRead = { navController.navigate("Read") { launchSingleTop = true } },
+                        onOpenQuests = { navController.navigate("Quests") { launchSingleTop = true } },
+                        onOpenStats = { navController.navigate("Stats") { launchSingleTop = true } },
+                        onOpenProfile = { navController.navigate("Profile") { launchSingleTop = true } })
                 }
-                "Library" -> LibraryScreen(Modifier.padding(padding), library,
-                    onRemove = { anime ->
-                        animeViewModel.remove(anime)
-                    },
-                    onUpdate = { updated ->
-                        animeViewModel.update(updated)
+                composable("Discover") {
+                    DiscoverScreen(Modifier.fillMaxSize(), library.map { it.id }.toSet()) { anime ->
+                        animeViewModel.toggle(anime)
                     }
-                )
-                "Read" -> ReadingScreen(Modifier.padding(padding), readingLibrary,
-                    onAdd = { title ->
-                        readingViewModel.add(title)
-                    },
-                    onUpdate = { updated ->
-                        readingViewModel.update(updated)
-                    },
-                    onRemove = { title ->
-                        readingViewModel.remove(title)
-                    }
-                )
-                "Music" -> MusicScreen(Modifier.padding(padding))
-                "Quests" -> QuestScreen(context, library, readingLibrary, Modifier.padding(padding))
-                "Stats" -> StatisticsScreen(library, readingLibrary, Modifier.padding(padding))
-                "History" -> WatchHistoryScreen(library, Modifier.padding(padding))
-                "Backup" -> BackupScreen(context, Modifier.padding(padding), onRestored = {
-                    animeViewModel.refresh()
-                    readingViewModel.refresh()
-                    val accent = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getInt("profileAccent", 0)
-                    VioletState.value = AccentPalette[accent.coerceIn(0, AccentPalette.lastIndex)]
-                })
-                else -> ProfileScreen(context, library, readingLibrary, Modifier.padding(padding))
+                }
+                composable("Library") {
+                    LibraryScreen(Modifier.fillMaxSize(), library,
+                        onRemove = { animeViewModel.remove(it) },
+                        onUpdate = { animeViewModel.update(it) })
+                }
+                composable("Read") {
+                    ReadingScreen(Modifier.fillMaxSize(), readingLibrary,
+                        onAdd = { readingViewModel.add(it) },
+                        onUpdate = { readingViewModel.update(it) },
+                        onRemove = { readingViewModel.remove(it) })
+                }
+                composable("Music") { MusicScreen(Modifier.fillMaxSize()) }
+                composable("Quests") { QuestScreen(context, library, readingLibrary, Modifier.fillMaxSize()) }
+                composable("Stats") { StatisticsScreen(library, readingLibrary, Modifier.fillMaxSize()) }
+                composable("History") { WatchHistoryScreen(library, Modifier.fillMaxSize()) }
+                composable("Backup") {
+                    BackupScreen(context, Modifier.fillMaxSize(), onRestored = {
+                        animeViewModel.refresh()
+                        readingViewModel.refresh()
+                        val accent = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE)
+                            .getInt("profileAccent", 0)
+                        VioletState.value = AccentPalette[accent.coerceIn(0, AccentPalette.lastIndex)]
+                    })
+                }
+                composable("Profile") { ProfileScreen(context, library, readingLibrary, Modifier.fillMaxSize()) }
             }
         }
         if (moreOpen) {
@@ -184,7 +192,7 @@ private fun AnilarperApp() {
                         Triple("Backup", "Export or restore your collection", Icons.Default.Backup),
                         Triple("Profile", "Your personal space", Icons.Default.Person)
                     ).forEach { (label, subtitle, icon) ->
-                        Row(Modifier.fillMaxWidth().clickable { selected = label; moreOpen = false }
+                        Row(Modifier.fillMaxWidth().clickable { navController.navigate(label) { launchSingleTop = true }; moreOpen = false }
                             .background(Panel2, RoundedCornerShape(14.dp)).padding(15.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(13.dp)) {
