@@ -2,7 +2,7 @@
 
 A personal, native Android anime, manga, light-novel, and soundtrack companion built around rediscovery, tracking, and low-pressure exploration.
 
-## Current build: 0.7.0
+## Current build: 0.9.0 (development)
 
 - Kotlin + Jetpack Compose; modern dark interface with violet accents
 - Home, Discover, Library, Read, Music, Quests, and Profile sections
@@ -79,3 +79,15 @@ Streaming links are bookmarks/launch points; they are not downloaded or re-hoste
 - Shows relation type, format, year, and release status for discovered entries.
 - Franchise maps include catalog entries whether or not they are in the user's library.
 - Clearly labels potentially incomplete results because upstream relationship metadata is not guaranteed to be exhaustive.
+
+
+## 0.9.0 — Personalization & Playback (in progress)
+
+- Continue Watching surfaces anime marked as currently watching with saved episode progress.
+- Watch History lists recently updated anime progress.
+- Statistics estimate viewing time from recorded episode progress.
+- Local music playback now includes persisted shuffle and repeat-one controls.
+- Shuffle changes the visible local track order for the current app session; the original library order is retained on disk.
+- Repeat-one loops the current local audio file. Streaming-service links remain official external app/site launch points.
+
+Background playback, full queue management, named playlists, and Profile 2.0 remain planned work and are not included yet.
