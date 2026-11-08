@@ -1510,6 +1510,31 @@ private fun ProfileScreen(context: Context, library: List<Anime>,
             Text(profile.favoriteTitles.ifBlank { "Pin your favorite anime, manga, or light novels in Customize profile." },
                 color = if (profile.favoriteTitles.isBlank()) Muted else White, fontSize = 13.sp)
         }
+        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(17.dp)).padding(15.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("ACHIEVEMENT SHOWCASE", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
+            val achievements = listOf(
+                Triple("Collector", "Save your first anime", library.isNotEmpty()),
+                Triple("First finale", "Complete an anime", library.any { it.watchStatus == "COMPLETED" }),
+                Triple("Binge tracker", "Log 10 episodes", library.sumOf { it.progress } >= 10),
+                Triple("Bookworm", "Add a reading title", readingLibrary.isNotEmpty())
+            )
+            achievements.forEach { (name, description, unlocked) ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(Modifier.size(34.dp).background(if (unlocked) Violet.copy(alpha = .16f) else Panel2, CircleShape),
+                        contentAlignment = Alignment.Center) {
+                        Icon(if (unlocked) Icons.Default.EmojiEvents else Icons.Default.Lock,
+                            contentDescription = null, tint = if (unlocked) Violet else Muted, modifier = Modifier.size(17.dp))
+                    }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(name, color = if (unlocked) White else Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text(description, color = Muted, fontSize = 10.sp)
+                    }
+                    Text(if (unlocked) "UNLOCKED" else "LOCKED",
+                        color = if (unlocked) Violet else Muted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
         Text("Profile settings are saved on this device.", color = Muted, fontSize = 11.sp)
         Spacer(Modifier.height(12.dp))
     }
