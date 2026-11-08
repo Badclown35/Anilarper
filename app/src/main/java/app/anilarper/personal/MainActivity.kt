@@ -230,6 +230,7 @@ private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, on
     var franchise by remember { mutableStateOf<FranchiseResult?>(null) }
     var franchiseLoading by remember { mutableStateOf(false) }
     var franchiseError by remember { mutableStateOf<String?>(null) }
+    var franchiseRetry by remember { mutableIntStateOf(0) }
     var genre by remember { mutableStateOf<String?>(null) }
     var format by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf<String?>(null) }
@@ -259,23 +260,30 @@ private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, on
         }
     }
     LaunchedEffect(Unit) { load() }
-    LaunchedEffect(selectedAnime?.id) {
+    LaunchedEffect(selectedAnime?.id, franchiseRetry) {
         val selected = selectedAnime ?: return@LaunchedEffect
-        detail = null
+        detail = selected
         detailError = null
         franchise = null
         franchiseError = null
         detailLoading = true
         franchiseLoading = true
+
+        // Details and franchise discovery are independent requests. Either can
+        // succeed even if the other one fails.
         try {
-            val graph = AniListApi.franchise(selected.id)
-            franchise = graph
-            detail = graph.root
-        } catch (_: Exception) {
-            detailError = "Extra details couldn't be loaded. The catalog summary is still available."
-            franchiseError = "The full franchise map couldn't be loaded. Try again in a moment."
+            detail = AniListApi.details(selected.id)
+        } catch (e: Exception) {
+            detailError = "Extra details unavailable: ${e.message?.take(100) ?: "network or AniList error"}"
         } finally {
             detailLoading = false
+        }
+
+        try {
+            franchise = AniListApi.franchise(selected.id, selected)
+        } catch (e: Exception) {
+            franchiseError = "Franchise scan failed: ${e.message?.take(100) ?: "network or AniList error"}"
+        } finally {
             franchiseLoading = false
         }
     }
@@ -401,8 +409,20 @@ private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, on
                             Text("Checking connected entries…", color = Muted, fontSize = 11.sp)
                         }
                     }
-                    franchiseError?.let { Text(it, color = Muted, fontSize = 10.sp) }
+                    franchiseError?.let { errorText ->
+                        Text(errorText, color = Muted, fontSize = 10.sp)
+                        TextButton(onClick = { franchiseRetry++ }, enabled = !franchiseLoading) {
+                            Text("Retry franchise scan", color = Violet)
+                        }
+                    }
                     franchise?.let { graph ->
+                        if (graph.isPartial) {
+                            Text("Some AniList requests failed or the scan reached its limit. Showing the entries retrieved so far.",
+                                color = Muted, fontSize = 10.sp)
+                            TextButton(onClick = { franchiseRetry++ }, enabled = !franchiseLoading) {
+                                Text("Retry to find more", color = Violet)
+                            }
+                        }
                         Text("${graph.entries.size} connected entries found • ${graph.scannedCount} checked",
                             color = Muted, fontSize = 10.sp)
                         graph.entries.forEach { relation ->
