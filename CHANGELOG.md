@@ -2,7 +2,7 @@
 
 All notable changes to Anilarper are documented here.
 
-## 1.0.0 — Phase 1 stabilization (in progress)
+## 1.0.0 — Phase 1 stabilization (verified by user)
 
 - Fixed local music player disposal so the active player is released only when Music leaves composition.
 - Hardened anime, manga/light-novel, and music JSON loaders to skip malformed individual entries instead of discarding the entire collection.
@@ -13,4 +13,13 @@ All notable changes to Anilarper are documented here.
 - Music playback now requests audio focus and releases MediaPlayer instances on setup/error paths.
 - Navigation selection survives rotation, Back returns to Home, and stale Discover searches are cancelled.
 
-> Device verification is still required; this phase is not considered complete until music and backup/restore are tested on a phone.
+> Phase 1 was tested successfully by the user on-device.
+
+
+## 1.0.0 — Phase 2 structure (in progress)
+
+- Extracted the Home and Reading screens into dedicated UI packages without changing their feature behavior.
+- Added a LibraryRepository as the single persistence owner for anime and reading collections, retaining SharedPreferences until the planned Room migration in Phase 3.
+- Added AnimeLibraryViewModel and ReadingLibraryViewModel with StateFlow, and connected collection screens to them.
+- Replaced string-based screen switching with Navigation Compose, including saved bottom-tab back stacks and navigation-managed Back behavior.
+- Remaining: extract Discover, Library, Music, and supporting screens; move remaining screen state into screen ViewModels; verify cancellation and result retention across tab switches.
