@@ -23,14 +23,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.anilarper.personal.theme.*
 import coil.compose.AsyncImage
 import app.anilarper.personal.Anime
-import app.anilarper.personal.Ink
-import app.anilarper.personal.Panel
-import app.anilarper.personal.Panel2
-import app.anilarper.personal.Violet
-import app.anilarper.personal.Muted
-import app.anilarper.personal.White
 import app.anilarper.personal.ui.home.DashboardStat
 
 @Composable
