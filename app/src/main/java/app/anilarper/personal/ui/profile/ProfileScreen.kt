@@ -22,7 +22,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import app.anilarper.personal.*
-import app.anilarper.personal.theme.*
 
 private data class ProfileSettings(
     val displayName: String = "Anime Explorer",
