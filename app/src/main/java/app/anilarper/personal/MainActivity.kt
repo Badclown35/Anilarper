@@ -42,6 +42,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.anilarper.personal.ui.home.HomeScreen
 import app.anilarper.personal.ui.reading.ReadingScreen
+import androidx.lifecycle.ViewModelProvider
+import app.anilarper.personal.data.AnimeLibraryViewModel
+import app.anilarper.personal.data.ReadingLibraryViewModel
+import app.anilarper.personal.data.CollectionViewModelFactory
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
@@ -76,8 +80,16 @@ private fun AnilarperApp() {
     BackHandler(enabled = selected != "Home" || moreOpen) {
         if (moreOpen) moreOpen = false else selected = "Home"
     }
-    var library by remember { mutableStateOf(loadLibrary(context)) }
-    var readingLibrary by remember { mutableStateOf(loadReadingLibrary(context)) }
+    val activity = context as ComponentActivity
+    val collectionFactory = remember(context) { CollectionViewModelFactory(context.applicationContext) }
+    val animeViewModel = remember(activity) {
+        ViewModelProvider(activity, collectionFactory)[AnimeLibraryViewModel::class.java]
+    }
+    val readingViewModel = remember(activity) {
+        ViewModelProvider(activity, collectionFactory)[ReadingLibraryViewModel::class.java]
+    }
+    val library by animeViewModel.library.collectAsState()
+    val readingLibrary by readingViewModel.library.collectAsState()
     LaunchedEffect(Unit) {
         val accent = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getInt("profileAccent", 0)
         VioletState.value = AccentPalette[accent.coerceIn(0, AccentPalette.lastIndex)]
@@ -122,34 +134,25 @@ private fun AnilarperApp() {
                     onOpenProfile = { selected = "Profile" }
                 )
                 "Discover" -> DiscoverScreen(Modifier.padding(padding), library.map { it.id }.toSet()) { anime ->
-                    library = if (library.any { it.id == anime.id }) library.filterNot { it.id == anime.id }
-                    else library + anime
-                    persistLibrary(context, library)
+                    animeViewModel.toggle(anime)
                 }
                 "Library" -> LibraryScreen(Modifier.padding(padding), library,
                     onRemove = { anime ->
-                        library = library.filterNot { it.id == anime.id }
-                        persistLibrary(context, library)
+                        animeViewModel.remove(anime)
                     },
                     onUpdate = { updated ->
-                        library = library.map { if (it.id == updated.id) updated else it }
-                        persistLibrary(context, library)
+                        animeViewModel.update(updated)
                     }
                 )
                 "Read" -> ReadingScreen(Modifier.padding(padding), readingLibrary,
                     onAdd = { title ->
-                        if (readingLibrary.none { it.id == title.id && it.kind == title.kind }) {
-                            readingLibrary = readingLibrary + title
-                            persistReadingLibrary(context, readingLibrary)
-                        }
+                        readingViewModel.add(title)
                     },
                     onUpdate = { updated ->
-                        readingLibrary = readingLibrary.map { if (it.id == updated.id && it.kind == updated.kind) updated else it }
-                        persistReadingLibrary(context, readingLibrary)
+                        readingViewModel.update(updated)
                     },
                     onRemove = { title ->
-                        readingLibrary = readingLibrary.filterNot { it.id == title.id && it.kind == title.kind }
-                        persistReadingLibrary(context, readingLibrary)
+                        readingViewModel.remove(title)
                     }
                 )
                 "Music" -> MusicScreen(Modifier.padding(padding))
@@ -157,8 +160,8 @@ private fun AnilarperApp() {
                 "Stats" -> StatisticsScreen(library, readingLibrary, Modifier.padding(padding))
                 "History" -> WatchHistoryScreen(library, Modifier.padding(padding))
                 "Backup" -> BackupScreen(context, Modifier.padding(padding), onRestored = {
-                    library = loadLibrary(context)
-                    readingLibrary = loadReadingLibrary(context)
+                    animeViewModel.refresh()
+                    readingViewModel.refresh()
                     val accent = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getInt("profileAccent", 0)
                     VioletState.value = AccentPalette[accent.coerceIn(0, AccentPalette.lastIndex)]
                 })
