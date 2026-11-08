@@ -69,12 +69,12 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
                         val candidates = AniListApi.search(row.title, 1, AnimeFilters()).items
                         val target = candidates.firstOrNull { normalizeTitle(it.title) == normalizeTitle(row.title) }
                         if (target == null) skipped++ else {
-                            val status = when (row.status.lowercase()) {
-                                "completed" -> "COMPLETED"
-                                "watching" -> "WATCHING"
-                                "on-hold", "on hold" -> "PAUSED"
-                                "dropped" -> "DROPPED"
-                                else -> "PLANNING"
+                            val status = when (row.status.trim().lowercase()) {
+                                "2", "completed" -> "COMPLETED"
+                                "1", "watching" -> "WATCHING"
+                                "3", "on-hold", "on hold" -> "PAUSED"
+                                "4", "dropped" -> "DROPPED"
+                                else -> "PLANNING" // MAL status 6 = Plan to Watch
                             }
                             onImport(target.copy(watchStatus = status,
                                 progress = if (status == "COMPLETED" && target.episodes != null) target.episodes else row.progress,
