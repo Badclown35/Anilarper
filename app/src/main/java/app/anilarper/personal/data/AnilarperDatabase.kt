@@ -11,9 +11,17 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import org.json.JSONArray
+
+@Entity(tableName = "catalog_cache")
+data class CatalogCacheEntity(
+    @PrimaryKey val cacheKey: String,
+    val payload: String,
+    val cachedAt: Long
+)
 
 @Entity(tableName = "collection_items")
 data class CollectionEntity(
@@ -33,6 +41,15 @@ interface CollectionDao {
     @Query("SELECT * FROM collection_items WHERE collectionType = :type ORDER BY position ASC")
     suspend fun getCollectionOnce(type: String): List<CollectionEntity>
 
+    @Query("SELECT * FROM catalog_cache WHERE cacheKey = :key LIMIT 1")
+    suspend fun getCached(key: String): CatalogCacheEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putCached(item: CatalogCacheEntity)
+
+    @Query("DELETE FROM catalog_cache WHERE cachedAt < :cutoff")
+    suspend fun pruneCache(cutoff: Long)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<CollectionEntity>)
 
@@ -40,11 +57,17 @@ interface CollectionDao {
     suspend fun clearCollection(type: String)
 }
 
-@Database(entities = [CollectionEntity::class], version = 1, exportSchema = false)
+@Database(entities = [CollectionEntity::class, CatalogCacheEntity::class], version = 2, exportSchema = false)
 abstract class AnilarperDatabase : RoomDatabase() {
     abstract fun collectionDao(): CollectionDao
 
     companion object {
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS catalog_cache (cacheKey TEXT NOT NULL, payload TEXT NOT NULL, cachedAt INTEGER NOT NULL, PRIMARY KEY(cacheKey))")
+            }
+        }
+
         @Volatile private var INSTANCE: AnilarperDatabase? = null
 
         fun get(context: Context): AnilarperDatabase =
@@ -53,7 +76,8 @@ abstract class AnilarperDatabase : RoomDatabase() {
                     context.applicationContext,
                     AnilarperDatabase::class.java,
                     "anilarper.db"
-                ).addCallback(SharedPreferencesImportCallback(context.applicationContext))
+                ).addMigrations(MIGRATION_1_2)
+                    .addCallback(SharedPreferencesImportCallback(context.applicationContext))
                     .build()
                     .also { INSTANCE = it }
             }
