@@ -1637,14 +1637,25 @@ private fun ProfileStat(label: String, value: String, modifier: Modifier = Modif
 
 private data class LocalTrack(val uri: String, val title: String)
 
-private fun loadTracks(context: Context): List<LocalTrack> {
-    val array = runCatching { JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("tracks", "[]") ?: "[]") }.getOrNull()
-        ?: return emptyList()
-    return (0 until array.length()).mapNotNull { i -> runCatching {
-        val item = array.getJSONObject(i)
-        LocalTrack(item.getString("uri"), item.optString("title", "Audio track").ifBlank { "Audio track" })
-    }.getOrNull() }
+private fun <T> JSONArray.mapSafe(block: (JSONObject) -> T): List<T> =
+    (0 until length()).mapNotNull { index -> runCatching { block(getJSONObject(index)) }.getOrNull() }
+
+private fun JSONArray?.toStrings(): List<String> =
+    if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+private fun readJsonArray(context: Context, key: String): JSONArray? {
+    val prefs = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE)
+    val raw = prefs.getString(key, "[]") ?: "[]"
+    return runCatching { JSONArray(raw) }.getOrElse {
+        prefs.edit().putString("${key}_corrupt_backup", raw).apply()
+        null
+    }
 }
+
+private fun loadTracks(context: Context): List<LocalTrack> =
+    readJsonArray(context, "tracks")?.mapSafe { item ->
+        LocalTrack(item.getString("uri"), item.optString("title", "Audio track").ifBlank { "Audio track" })
+    } ?: emptyList()
 
 private fun persistTracks(context: Context, tracks: List<LocalTrack>) {
     val array = JSONArray()
@@ -1652,17 +1663,13 @@ private fun persistTracks(context: Context, tracks: List<LocalTrack>) {
     context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putString("tracks", array.toString()).apply()
 }
 
-private fun loadReadingLibrary(context: Context): List<ReadingTitle> {
-    val array = runCatching { JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("readingLibrary", "[]") ?: "[]") }.getOrNull()
-        ?: return emptyList()
-    return (0 until array.length()).mapNotNull { i -> runCatching {
-        val o = array.getJSONObject(i)
+private fun loadReadingLibrary(context: Context): List<ReadingTitle> =
+    readJsonArray(context, "readingLibrary")?.mapSafe { o ->
         ReadingTitle(o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
             o.optString("format"), o.optString("status"), if (o.isNull("chapters")) null else o.optInt("chapters"),
             if (o.isNull("volumes")) null else o.optInt("volumes"), o.optString("description"),
             o.optString("kind", "MANGA"), o.optInt("progress"), o.optInt("volumeProgress"), o.optString("readingStatus", "PLANNING"))
-    }.getOrNull() }
-}
+    } ?: emptyList()
 
 private fun persistReadingLibrary(context: Context, library: List<ReadingTitle>) {
     val array = JSONArray()
@@ -1722,21 +1729,16 @@ private fun FeatureLine(text: String) {
     }
 }
 
-private fun loadLibrary(context: Context): List<Anime> {
-    val array = runCatching { JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("library", "[]") ?: "[]") }.getOrNull()
-        ?: return emptyList()
-    return (0 until array.length()).mapNotNull { i -> runCatching {
-        val o = array.getJSONObject(i)
+private fun loadLibrary(context: Context): List<Anime> =
+    readJsonArray(context, "library")?.mapSafe { o ->
         Anime(o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
             o.optString("format"), o.optString("status"),
             if (o.isNull("episodes")) null else o.optInt("episodes"),
             if (o.isNull("score")) null else o.optInt("score"), o.optString("description"),
             o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0), o.optLong("lastWatchedAt", 0L),
-            o.optString("season"), if (o.isNull("seasonYear")) null else o.optInt("seasonYear"),
-            o.optJSONArray("genres")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList(),
-            o.optJSONArray("studios")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList())
-    }.getOrNull() }
-}
+            o.optString("season"), if (!o.has("seasonYear") || o.isNull("seasonYear")) null else o.optInt("seasonYear"),
+            o.optJSONArray("genres").toStrings(), o.optJSONArray("studios").toStrings())
+    } ?: emptyList()
 
 private fun persistLibrary(context: Context, library: List<Anime>) {
     val array = JSONArray()
