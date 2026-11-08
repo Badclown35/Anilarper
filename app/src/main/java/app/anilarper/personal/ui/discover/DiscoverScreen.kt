@@ -43,6 +43,8 @@ import app.anilarper.personal.ui.home.DashboardStat
 import app.anilarper.personal.ui.reading.ReadingScreen
 import app.anilarper.personal.ui.library.LibraryScreen
 import app.anilarper.personal.ui.library.AnimeRow
+import app.anilarper.personal.data.DiscoverViewModel
+import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.ViewModelProvider
 import app.anilarper.personal.data.AnimeLibraryViewModel
 import app.anilarper.personal.data.ReadingLibraryViewModel
@@ -65,12 +67,13 @@ import app.anilarper.personal.ui.library.AnimeRow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, onToggleSaved: (Anime) -> Unit) {
+fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, viewModel: DiscoverViewModel, onToggleSaved: (Anime) -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
-    var results by remember { mutableStateOf<List<Anime>>(emptyList()) }
-    var page by remember { mutableIntStateOf(1) }
-    var hasNext by remember { mutableStateOf(false) }
-    var loading by remember { mutableStateOf(true) }
+    val cache by viewModel.cache.collectAsState()
+    val results = cache.items
+    val page = cache.page
+    val hasNext = cache.hasNextPage
+    var loading by remember { mutableStateOf(cache.items.isEmpty()) }
     var loadingMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedAnime by remember { mutableStateOf<Anime?>(null) }
@@ -96,15 +99,14 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, onToggleSa
     fun load(reset: Boolean = true) {
         loadJob?.cancel()
         loadJob = scope.launch {
-            if (reset) { loading = true; page = 1; hasNext = false } else loadingMore = true
+            if (reset) loading = true else loadingMore = true
             error = null
             try {
-                val nextPage = if (reset) 1 else page + 1
+                val nextPage = if (reset) 1 else viewModel.cache.value.page + 1
                 val fetched = AniListApi.search(query, nextPage,
                     AnimeFilters(genre, format, status, season, if (season == null) null else seasonYear, sort))
-                results = if (reset) fetched.items else (results + fetched.items).distinctBy { it.id }
-                page = fetched.page
-                hasNext = fetched.hasNextPage
+                val merged = if (reset) fetched.items else (viewModel.cache.value.items + fetched.items).distinctBy { it.id }
+                viewModel.updateCache(merged, fetched.page, fetched.hasNextPage)
             } catch (e: Exception) {
                 error = if (e.message?.contains("rate", true) == true)
                     "AniList is receiving too many requests. Wait a moment, then retry."
@@ -112,7 +114,8 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, onToggleSa
             } finally { if (isActive) { loading = false; loadingMore = false } }
         }
     }
-    LaunchedEffect(Unit) { load() }
+    LaunchedEffect(Unit) { if (viewModel.cache.value.items.isEmpty()) load() }
+    DisposableEffect(Unit) { onDispose { loadJob?.cancel() } }
     LaunchedEffect(selectedAnime?.id, franchiseRetry) {
         val selected = selectedAnime ?: return@LaunchedEffect
         detail = selected
