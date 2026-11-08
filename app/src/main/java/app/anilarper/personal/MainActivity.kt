@@ -293,7 +293,10 @@ private fun HomeScreen(
                     }
                     TextButton(onClick = onOpenLibrary) { Text("Library", color = Violet) }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(11.dp)
+                ) {
                     completed.take(3).forEach { anime ->
                         Column(Modifier.width(112.dp).clickable { onOpenLibrary() },
                             verticalArrangement = Arrangement.spacedBy(6.dp)) {
