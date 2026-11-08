@@ -87,7 +87,11 @@ private fun AnilarperApp() {
             }
         ) { padding ->
             when (selected) {
-                "Home" -> HomeScreen(Modifier.padding(padding), library) { selected = "Discover" }
+                "Home" -> HomeScreen(
+                    Modifier.padding(padding), library,
+                    onDiscover = { selected = "Discover" },
+                    onOpenLibrary = { selected = "Library" }
+                )
                 "Discover" -> DiscoverScreen(Modifier.padding(padding), library.map { it.id }.toSet()) { anime ->
                     library = if (library.any { it.id == anime.id }) library.filterNot { it.id == anime.id }
                     else library + anime
@@ -161,7 +165,12 @@ private fun AnilarperApp() {
 }
 
 @Composable
-private fun HomeScreen(modifier: Modifier = Modifier, library: List<Anime>, onDiscover: () -> Unit) {
+private fun HomeScreen(
+    modifier: Modifier = Modifier,
+    library: List<Anime>,
+    onDiscover: () -> Unit,
+    onOpenLibrary: () -> Unit
+) {
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)) {
         Spacer(Modifier.height(18.dp))
@@ -191,14 +200,18 @@ private fun HomeScreen(modifier: Modifier = Modifier, library: List<Anime>, onDi
                 }
             }
         }
-        val continueWatching = library.filter { it.watchStatus == "WATCHING" && it.progress > 0 }
+        val continueWatching = library.filter { it.watchStatus == "WATCHING" }
             .sortedByDescending { it.lastWatchedAt }.take(5)
+        SectionTitle("Continue watching", "Pick up where you left off")
         if (continueWatching.isNotEmpty()) {
-            SectionTitle("Continue watching", "Pick up where you left off")
             Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 continueWatching.forEach { anime ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onOpenLibrary() },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
                         AsyncImage(model = anime.cover, contentDescription = anime.title,
                             modifier = Modifier.size(width = 46.dp, height = 60.dp).background(Panel2, RoundedCornerShape(7.dp)))
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -206,7 +219,44 @@ private fun HomeScreen(modifier: Modifier = Modifier, library: List<Anime>, onDi
                             Text("Episode ${anime.progress}${anime.episodes?.let { " / $it" } ?: ""}",
                                 color = Muted, fontSize = 10.sp)
                         }
-                        Icon(Icons.Default.PlayCircle, contentDescription = "Continue watching", tint = Violet)
+                        Icon(Icons.Default.PlayCircle, contentDescription = "Open progress", tint = Violet)
+                    }
+                }
+                TextButton(onClick = onOpenLibrary) {
+                    Text("Update episode progress", color = Violet)
+                }
+            }
+        } else {
+            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("Nothing in progress yet", color = White, fontWeight = FontWeight.SemiBold)
+                Text("Add an anime to your library and set its status to Watching to see it here.",
+                    color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+                TextButton(onClick = onDiscover) { Text("Explore anime  →", color = Violet) }
+            }
+        }
+        SectionTitle("Your collection", "A quick look at your library")
+        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            ProfileStat("Anime saved", library.size.toString(), Modifier.weight(1f))
+            ProfileStat("Watching", library.count { it.watchStatus == "WATCHING" }.toString(), Modifier.weight(1f))
+            ProfileStat("Completed", library.count { it.watchStatus == "COMPLETED" }.toString(), Modifier.weight(1f))
+        }
+        val recentlyCompleted = library.filter { it.watchStatus == "COMPLETED" }
+            .sortedByDescending { it.lastWatchedAt }.take(3)
+        if (recentlyCompleted.isNotEmpty()) {
+            SectionTitle("Recently completed", "Titles you've finished")
+            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                recentlyCompleted.forEach { anime ->
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        AsyncImage(model = anime.cover, contentDescription = anime.title,
+                            modifier = Modifier.size(width = 38.dp, height = 50.dp).background(Panel2, RoundedCornerShape(7.dp)))
+                        Column(Modifier.weight(1f)) {
+                            Text(anime.title, color = White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                            Text("Completed", color = Muted, fontSize = 10.sp)
+                        }
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Violet)
                     }
                 }
             }
