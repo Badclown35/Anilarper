@@ -119,10 +119,8 @@ private fun AnilarperApp() {
                     }
                 )
                 "Music" -> MusicScreen(Modifier.padding(padding))
-                "Quests" -> ModuleScreen("Nexus quests", "Small goals, on your schedule.",
-                    listOf("Explore one new series", "Update an episode count", "Add a manga to your list"), Modifier.padding(padding))
-                else -> ModuleScreen("Your profile", "Your anime identity, stats, and collection.",
-                    listOf("Your saved titles", "Personal stats are coming next"), Modifier.padding(padding))
+                "Quests" -> QuestScreen(context, library, readingLibrary, Modifier.padding(padding))
+                else -> ProfileScreen(context, library, readingLibrary, Modifier.padding(padding))
             }
         }
     }
@@ -597,6 +595,225 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
                 }
             }
         }
+    }
+}
+
+
+private data class ProfileSettings(
+    val displayName: String = "Anime Explorer",
+    val bio: String = "Finding my next favorite story.",
+    val avatarUrl: String = "",
+    val bannerStyle: Int = 0,
+    val favoriteTitles: String = ""
+)
+
+private fun loadProfile(context: Context): ProfileSettings {
+    val p = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE)
+    return ProfileSettings(
+        p.getString("profileName", "Anime Explorer") ?: "Anime Explorer",
+        p.getString("profileBio", "Finding my next favorite story.") ?: "",
+        p.getString("profileAvatar", "") ?: "",
+        p.getInt("profileBanner", 0),
+        p.getString("profileFavorites", "") ?: ""
+    )
+}
+
+private fun saveProfile(context: Context, profile: ProfileSettings) {
+    context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit()
+        .putString("profileName", profile.displayName)
+        .putString("profileBio", profile.bio)
+        .putString("profileAvatar", profile.avatarUrl)
+        .putInt("profileBanner", profile.bannerStyle)
+        .putString("profileFavorites", profile.favoriteTitles)
+        .apply()
+}
+
+private data class QuestData(val id: String, val title: String, val detail: String,
+    val progress: Int, val target: Int, val reward: Int)
+
+@Composable
+private fun QuestScreen(context: Context, library: List<Anime>,
+    readingLibrary: List<ReadingTitle>, modifier: Modifier = Modifier) {
+    val prefs = remember { context.getSharedPreferences("anilarper", Context.MODE_PRIVATE) }
+    var xp by remember { mutableIntStateOf(prefs.getInt("questXp", 0)) }
+    var claimed by remember {
+        mutableStateOf(runCatching {
+            val a = JSONArray(prefs.getString("claimedQuests", "[]") ?: "[]")
+            (0 until a.length()).map { a.getString(it) }.toSet()
+        }.getOrDefault(emptySet()))
+    }
+    val quests = listOf(
+        QuestData("first_save", "First addition", "Save an anime to your library.", if (library.isNotEmpty()) 1 else 0, 1, 25),
+        QuestData("episode_one", "Track your progress", "Log an episode watched.", library.sumOf { it.progress }.coerceAtMost(1), 1, 30),
+        QuestData("reading_one", "A new chapter", "Add a manga or light novel to your shelf.", if (readingLibrary.isNotEmpty()) 1 else 0, 1, 25),
+        QuestData("collection_three", "Building a collection", "Save three anime titles.", library.size.coerceAtMost(3), 3, 50),
+        QuestData("finish_one", "One story completed", "Mark an anime as completed.", if (library.any { it.watchStatus == "COMPLETED" }) 1 else 0, 1, 60)
+    )
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(13.dp)) {
+        Spacer(Modifier.height(18.dp))
+        Text("YOUR JOURNEY", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        Text("Quests & milestones", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text("Optional goals. No streaks, deadlines, or penalties for taking a break.", color = Muted, fontSize = 12.sp)
+        Row(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF342B58), Panel2)),
+            RoundedCornerShape(18.dp)).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("TOTAL EXPERIENCE", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Text(xp.toString() + " XP", color = White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                Text("Earn XP by completing milestones when you choose.", color = Muted, fontSize = 11.sp)
+            }
+            Icon(Icons.Default.EmojiEvents, contentDescription = null, tint = Violet, modifier = Modifier.size(42.dp))
+        }
+        quests.forEach { quest ->
+            val done = quest.progress >= quest.target
+            val isClaimed = claimed.contains(quest.id)
+            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(quest.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text(quest.detail, color = Muted, fontSize = 11.sp)
+                    }
+                    Text("+" + quest.reward + " XP", color = Violet, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+                LinearProgressIndicator(
+                    progress = { (quest.progress.toFloat() / quest.target).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().height(6.dp), color = Violet, trackColor = Panel2)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(quest.progress.toString() + "/" + quest.target, color = Muted, fontSize = 10.sp)
+                    Spacer(Modifier.weight(1f))
+                    when {
+                        isClaimed -> Text("REWARD CLAIMED", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        done -> Button(onClick = {
+                            xp += quest.reward
+                            claimed = claimed + quest.id
+                            prefs.edit().putInt("questXp", xp)
+                                .putString("claimedQuests", JSONArray(claimed.toList()).toString()).apply()
+                        }, colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = Ink),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)) {
+                            Text("Claim reward", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        else -> Text("IN PROGRESS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun ProfileScreen(context: Context, library: List<Anime>,
+    readingLibrary: List<ReadingTitle>, modifier: Modifier = Modifier) {
+    var profile by remember { mutableStateOf(loadProfile(context)) }
+    var editing by remember { mutableStateOf(false) }
+    val bannerColors = listOf(
+        listOf(Color(0xFF30294F), Color(0xFF171923), Color(0xFF252039)),
+        listOf(Color(0xFF193D45), Color(0xFF171923), Color(0xFF24334A)),
+        listOf(Color(0xFF4A283D), Color(0xFF171923), Color(0xFF34253F)),
+        listOf(Color(0xFF343A45), Color(0xFF171923), Color(0xFF242B39))
+    )
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Spacer(Modifier.height(18.dp))
+        Text("YOUR SPACE", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        Box(Modifier.fillMaxWidth().background(Brush.linearGradient(bannerColors[profile.bannerStyle.coerceIn(0, 3)]),
+            RoundedCornerShape(22.dp)).padding(18.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (profile.avatarUrl.isNotBlank()) {
+                        AsyncImage(model = profile.avatarUrl, contentDescription = "Profile avatar",
+                            modifier = Modifier.size(68.dp).background(Panel2, CircleShape))
+                    } else {
+                        Box(Modifier.size(68.dp).background(Panel2, CircleShape), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Person, contentDescription = null, tint = Violet, modifier = Modifier.size(34.dp))
+                        }
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(profile.displayName, color = White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                        Text("ANILARPER MEMBER", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                    }
+                }
+                Text(profile.bio.ifBlank { "No bio yet. Make this space yours." }, color = White.copy(alpha = .85f), fontSize = 12.sp)
+                OutlinedButton(onClick = { editing = true },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = White),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Violet.copy(alpha = .6f))) {
+                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Customize profile")
+                }
+            }
+        }
+        Text("YOUR COLLECTION", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            ProfileStat("Anime", library.size.toString(), Modifier.weight(1f))
+            ProfileStat("Completed", library.count { it.watchStatus == "COMPLETED" }.toString(), Modifier.weight(1f))
+            ProfileStat("Reading", readingLibrary.size.toString(), Modifier.weight(1f))
+        }
+        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(15.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("FAVORITES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Text(profile.favoriteTitles.ifBlank { "Pin your favorite anime, manga, or light novels in Customize profile." },
+                color = if (profile.favoriteTitles.isBlank()) Muted else White, fontSize = 13.sp)
+        }
+        Text("Profile settings are saved on this device.", color = Muted, fontSize = 11.sp)
+        Spacer(Modifier.height(12.dp))
+    }
+    if (editing) {
+        var name by remember(profile) { mutableStateOf(profile.displayName) }
+        var bio by remember(profile) { mutableStateOf(profile.bio) }
+        var avatar by remember(profile) { mutableStateOf(profile.avatarUrl) }
+        var favorites by remember(profile) { mutableStateOf(profile.favoriteTitles) }
+        var banner by remember(profile) { mutableIntStateOf(profile.bannerStyle) }
+        AlertDialog(
+            onDismissRequest = { editing = false }, containerColor = Panel2,
+            title = { Text("Customize your profile", color = White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text("Display name", color = Muted, fontSize = 11.sp)
+                    OutlinedTextField(name, { name = it.take(32) }, singleLine = true,
+                        placeholder = { Text("Your display name") })
+                    Text("Bio", color = Muted, fontSize = 11.sp)
+                    OutlinedTextField(bio, { bio = it.take(140) }, minLines = 2,
+                        placeholder = { Text("A little about your anime taste") })
+                    Text("Avatar image URL (optional)", color = Muted, fontSize = 11.sp)
+                    OutlinedTextField(avatar, { avatar = it.take(500) }, singleLine = true,
+                        placeholder = { Text("https://…") })
+                    Text("Favorite titles", color = Muted, fontSize = 11.sp)
+                    OutlinedTextField(favorites, { favorites = it.take(180) }, minLines = 2,
+                        placeholder = { Text("Separate titles with commas") })
+                    Text("Profile banner", color = Muted, fontSize = 11.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        bannerColors.forEachIndexed { index, colors ->
+                            Box(Modifier.weight(1f).height(38.dp)
+                                .background(Brush.linearGradient(colors), RoundedCornerShape(9.dp))
+                                .clickable { banner = index }) {
+                                if (banner == index) Icon(Icons.Default.Check, null, tint = White,
+                                    modifier = Modifier.align(Alignment.Center))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    profile = ProfileSettings(name.ifBlank { "Anime Explorer" }, bio, avatar, banner, favorites)
+                    saveProfile(context, profile)
+                    editing = false
+                }) { Text("Save profile", color = Violet) }
+            },
+            dismissButton = { TextButton(onClick = { editing = false }) { Text("Cancel", color = Muted) } }
+        )
+    }
+}
+
+@Composable
+private fun ProfileStat(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier.background(Panel, RoundedCornerShape(14.dp)).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(value, color = White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = Muted, fontSize = 10.sp)
     }
 }
 
