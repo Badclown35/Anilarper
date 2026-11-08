@@ -1420,23 +1420,10 @@ private fun persistTracks(context: Context, tracks: List<LocalTrack>) {
 }
 
 private fun loadReadingLibrary(context: Context): List<ReadingTitle> =
-    readJsonArray(context, "readingLibrary")?.mapSafe { o ->
-        ReadingTitle(o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
-            o.optString("format"), o.optString("status"), if (o.isNull("chapters")) null else o.optInt("chapters"),
-            if (o.isNull("volumes")) null else o.optInt("volumes"), o.optString("description"),
-            o.optString("kind", "MANGA"), o.optInt("progress"), o.optInt("volumeProgress"), o.optString("readingStatus", "PLANNING"))
-    } ?: emptyList()
+    app.anilarper.personal.data.LibraryRepository(context).loadReading()
 
 private fun persistReadingLibrary(context: Context, library: List<ReadingTitle>) {
-    val array = JSONArray()
-    library.forEach { item ->
-        array.put(JSONObject().put("id", item.id).put("title", item.title).put("nativeTitle", item.nativeTitle)
-            .put("cover", item.cover).put("format", item.format).put("status", item.status)
-            .put("chapters", item.chapters).put("volumes", item.volumes).put("description", item.description)
-            .put("kind", item.kind).put("progress", item.progress).put("volumeProgress", item.volumeProgress)
-            .put("readingStatus", item.readingStatus))
-    }
-    context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putString("readingLibrary", array.toString()).apply()
+    app.anilarper.personal.data.LibraryRepository(context).saveReading(library)
 }
 
 @Composable
@@ -1486,26 +1473,8 @@ private fun FeatureLine(text: String) {
 }
 
 private fun loadLibrary(context: Context): List<Anime> =
-    readJsonArray(context, "library")?.mapSafe { o ->
-        Anime(o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
-            o.optString("format"), o.optString("status"),
-            if (o.isNull("episodes")) null else o.optInt("episodes"),
-            if (o.isNull("score")) null else o.optInt("score"), o.optString("description"),
-            o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0), o.optLong("lastWatchedAt", 0L),
-            o.optString("season"), if (!o.has("seasonYear") || o.isNull("seasonYear")) null else o.optInt("seasonYear"),
-            o.optJSONArray("genres").toStrings(), o.optJSONArray("studios").toStrings())
-    } ?: emptyList()
+    app.anilarper.personal.data.LibraryRepository(context).loadAnime()
 
 private fun persistLibrary(context: Context, library: List<Anime>) {
-    val array = JSONArray()
-    library.forEach { a ->
-        array.put(JSONObject().put("id", a.id).put("title", a.title).put("nativeTitle", a.nativeTitle)
-            .put("cover", a.cover).put("format", a.format).put("status", a.status)
-            .put("episodes", a.episodes).put("score", a.score).put("description", a.description)
-            .put("watchStatus", a.watchStatus).put("progress", a.progress)
-            .put("lastWatchedAt", a.lastWatchedAt).put("season", a.season).put("seasonYear", a.seasonYear)
-            .put("genres", JSONArray(a.genres)).put("studios", JSONArray(a.studios)))
-    }
-    context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit()
-        .putString("library", array.toString()).apply()
+    app.anilarper.personal.data.LibraryRepository(context).saveAnime(library)
 }
