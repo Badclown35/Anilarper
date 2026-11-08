@@ -55,6 +55,24 @@ class LibraryRepository(context: Context) {
         saveReadingToRoom(loadReading())
     }
 
+    suspend fun createBackup(): JSONObject {
+        val values = JSONObject(preferences.all)
+        values.put("library", JSONArray().apply {
+            roomDao.getCollectionOnce("anime").forEach { row ->
+                put(JSONObject(row.payload))
+            }
+        })
+        values.put("readingLibrary", JSONArray().apply {
+            roomDao.getCollectionOnce("reading").forEach { row ->
+                put(JSONObject(row.payload))
+            }
+        })
+        return JSONObject()
+            .put("format", "anilarper-backup")
+            .put("version", 1)
+            .put("preferences", values)
+    }
+
     private fun parseAnime(o: JSONObject) = Anime(
         o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
         o.optString("format"), o.optString("status"),
