@@ -1435,7 +1435,7 @@ private fun StatisticsScreen(library: List<Anime>, readingLibrary: List<ReadingT
                 DashboardStat("MANGA", manga.toString(), Icons.Default.MenuBook, Modifier.weight(1f))
                 DashboardStat("LIGHT NOVELS", novels.toString(), Icons.Default.AutoStories, Modifier.weight(1f))
             }
-            Text("$\{readingLibrary.sumOf { it.progress }} chapters tracked • $\{readingLibrary.sumOf { it.volumeProgress }} volumes tracked",
+            Text("${readingLibrary.sumOf { it.progress }} chapters tracked • ${readingLibrary.sumOf { it.volumeProgress }} volumes tracked",
                 color = Muted, fontSize = 11.sp)
         }
         if (genreCounts.isNotEmpty()) {
@@ -1445,7 +1445,7 @@ private fun StatisticsScreen(library: List<Anime>, readingLibrary: List<ReadingT
                 genreCounts.forEach { (genre, count) ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(genre, color = White, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        Text("$count $\{if (count == 1) "title" else "titles"}", color = Muted, fontSize = 10.sp)
+                        Text("$count ${if (count == 1) "title" else "titles"}", color = Muted, fontSize = 10.sp)
                     }
                 }
             }
