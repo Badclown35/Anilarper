@@ -28,6 +28,8 @@ data class Anime(
 )
 
 data class AnimePage(val items: List<Anime>, val page: Int, val hasNextPage: Boolean)
+
+data class FranchiseResult(val root: Anime, val entries: List<AnimeRelation>, val isPartial: Boolean, val scannedCount: Int)
 data class AnimeFilters(
     val genre: String? = null,
     val format: String? = null,
@@ -91,6 +93,65 @@ object AniListApi {
             AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
                 info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
         }
+
+    suspend fun franchise(id: Int, maxTitles: Int = 80): FranchiseResult = withContext(Dispatchers.IO) {
+        val root = details(id)
+        val found = linkedMapOf<Int, AnimeRelation>()
+        val scanned = mutableSetOf<Int>()
+        var frontier = root.relations.map { it.anime.id to it.relation }.filter { it.first != id }
+        var rounds = 0
+        while (frontier.isNotEmpty() && found.size < maxTitles && rounds < 4) {
+            val next = frontier.filter { (entryId, _) ->
+                entryId != id && entryId !in scanned && entryId !in found
+            }.distinctBy { it.first }.take(maxTitles - found.size)
+            if (next.isEmpty()) break
+            val fetched = mutableListOf<Anime>()
+            for (batch in next.map { it.first }.chunked(20)) {
+                fetched += fetchAnimeBatch(batch)
+            }
+            val relationById = next.toMap()
+            fetched.forEach { anime ->
+                scanned += anime.id
+                if (anime.id != id) {
+                    found.putIfAbsent(anime.id, AnimeRelation(relationById[anime.id] ?: "RELATED", anime))
+                }
+            }
+            frontier = fetched.flatMap { parent ->
+                parent.relations.map { it.anime.id to it.relation }
+            }
+            rounds++
+        }
+        val partial = frontier.any { it.first != id && it.first !in scanned && it.first !in found } ||
+            found.size >= maxTitles
+        FranchiseResult(root, found.values.sortedWith(compareBy<AnimeRelation>({ franchiseOrder(it.relation) }, { it.anime.seasonYear ?: 9999 }, { it.anime.title.lowercase() })), partial, scanned.size)
+    }
+
+    private fun franchiseOrder(relation: String): Int = when (relation) {
+        "PREQUEL" -> 0
+        "SEQUEL" -> 1
+        "PARENT" -> 2
+        "SIDE_STORY", "ALTERNATIVE" -> 3
+        "SUMMARY", "COMPILATION" -> 4
+        "SPIN_OFF" -> 5
+        "CHARACTER" -> 6
+        else -> 7
+    }
+
+    private suspend fun fetchAnimeBatch(ids: List<Int>): List<Anime> {
+        if (ids.isEmpty()) return emptyList()
+        val gql = """
+            query ($ids: [Int]) {
+                Page(perPage: 50) {
+                    media(id_in: $ids, type: ANIME, isAdult: false) {
+                        $FIELDS
+                    }
+                }
+            }
+        """.trimIndent()
+        val variables = JSONObject().put("ids", JSONArray(ids))
+        val media = request(gql, variables).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+        return (0 until media.length()).map { parseAnime(media.getJSONObject(it)) }
+    }
 
     suspend fun details(id: Int): Anime = withContext(Dispatchers.IO) {
         val gql = """
