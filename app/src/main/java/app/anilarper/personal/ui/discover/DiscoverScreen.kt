@@ -44,6 +44,7 @@ import app.anilarper.personal.ui.reading.ReadingScreen
 import app.anilarper.personal.ui.library.LibraryScreen
 import app.anilarper.personal.ui.library.AnimeRow
 import app.anilarper.personal.data.DiscoverViewModel
+import app.anilarper.personal.data.CatalogCacheRepository
 import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.ViewModelProvider
 import app.anilarper.personal.data.AnimeLibraryViewModel
@@ -92,6 +93,8 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, viewModel:
     var sort by rememberSaveable { mutableStateOf("TRENDING_DESC") }
     var filterMenu by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val catalogCache = remember(context) { CatalogCacheRepository(context) }
     val keyboard = LocalSoftwareKeyboardController.current
     var loadJob by remember { mutableStateOf<Job?>(null) }
 
@@ -102,14 +105,26 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, viewModel:
             error = null
             try {
                 val nextPage = if (reset) 1 else viewModel.cache.value.page + 1
-                val fetched = AniListApi.search(query, nextPage,
-                    AnimeFilters(genre, format, status, season, if (season == null) null else seasonYear, sort))
+                val filters = AnimeFilters(genre, format, status, season, if (season == null) null else seasonYear, sort)
+                val cacheKey = CatalogCacheRepository.animeKey(query, nextPage, filters)
+                val fetched = AniListApi.search(query, nextPage, filters)
+                catalogCache.saveAnimePage(cacheKey, fetched)
                 val merged = if (reset) fetched.items else (viewModel.cache.value.items + fetched.items).distinctBy { it.id }
                 viewModel.updateCache(merged, fetched.page, fetched.hasNextPage)
             } catch (e: Exception) {
-                error = if (e.message?.contains("rate", true) == true)
-                    "AniList is receiving too many requests. Wait a moment, then retry."
-                else "Couldn't load anime. Check your connection and try again."
+                val nextPage = if (reset) 1 else viewModel.cache.value.page + 1
+                val filters = AnimeFilters(genre, format, status, season, if (season == null) null else seasonYear, sort)
+                val cacheKey = CatalogCacheRepository.animeKey(query, nextPage, filters)
+                val cached = runCatching { catalogCache.getAnimePage(cacheKey) }.getOrNull()
+                if (cached != null) {
+                    val merged = if (reset) cached.items else (viewModel.cache.value.items + cached.items).distinctBy { it.id }
+                    viewModel.updateCache(merged, cached.page, cached.hasNextPage)
+                    error = "Offline — showing saved catalog results."
+                } else {
+                    error = if (e.message?.contains("rate", true) == true)
+                        "AniList is receiving too many requests. Wait a moment, then retry."
+                    else "Couldn't load anime. Check your connection and try again."
+                }
             } finally { if (isActive) { loading = false; loadingMore = false } }
         }
     }
