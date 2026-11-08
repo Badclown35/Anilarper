@@ -68,18 +68,22 @@ private fun AnilarperApp() {
         Scaffold(
             containerColor = Ink,
             bottomBar = {
-                NavigationBar(containerColor = Panel, tonalElevation = 8.dp) {
+                NavigationBar(containerColor = Color(0xFF11131B), tonalElevation = 0.dp) {
                     listOf("Home" to Icons.Default.Home, "Discover" to Icons.Default.Explore,
                         "Library" to Icons.Default.Bookmarks, "More" to Icons.Default.MoreHoriz).forEach { (label, icon) ->
                         NavigationBarItem(
                             selected = if (label == "More") selected in setOf("Read", "Music", "Quests", "Profile", "Stats", "Backup", "History") else selected == label,
                             onClick = { if (label == "More") moreOpen = true else selected = label },
-                            icon = { Icon(icon, contentDescription = label) },
-                            label = { Text(label, fontSize = 11.sp, maxLines = 1) },
+                            icon = { Icon(icon, contentDescription = label,
+                                modifier = Modifier.size(if (selected == label) 23.dp else 21.dp)) },
+                            label = { Text(label, fontSize = 10.sp,
+                                fontWeight = if (selected == label) FontWeight.Bold else FontWeight.Medium, maxLines = 1) },
+                            alwaysShowLabel = true,
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = Violet, selectedTextColor = Violet,
-                                indicatorColor = Violet.copy(alpha = .16f),
-                                unselectedIconColor = Muted, unselectedTextColor = Muted
+                                indicatorColor = Violet.copy(alpha = .14f),
+                                unselectedIconColor = Color(0xFF777B8D),
+                                unselectedTextColor = Color(0xFF777B8D)
                             )
                         )
                     }
@@ -179,130 +183,166 @@ private fun HomeScreen(
     onOpenStats: () -> Unit,
     onOpenProfile: () -> Unit
 ) {
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        Spacer(Modifier.height(18.dp))
+    val watching = library.filter { it.watchStatus == "WATCHING" }.sortedByDescending { it.lastWatchedAt }
+    val completed = library.filter { it.watchStatus == "COMPLETED" }.sortedByDescending { it.lastWatchedAt }
+    val featured = watching.firstOrNull() ?: library.firstOrNull()
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(22.dp)) {
+        Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("ANILARPER", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                Text("Your next chapter.", color = White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+                Text("ANILARPER", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.2.sp)
+                Text("Discover your next chapter.", color = White, fontSize = 23.sp, fontWeight = FontWeight.Bold)
             }
-            Box(Modifier.size(42.dp).clickable { onOpenProfile() }.background(Panel2, CircleShape), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(44.dp).background(Panel2, CircleShape).clickable { onOpenProfile() },
+                contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.Person, contentDescription = "Profile", tint = Violet)
             }
         }
-        Box(Modifier.fillMaxWidth().background(
-            Brush.linearGradient(listOf(Color(0xFF30294F), Color(0xFF171923), Color(0xFF252039))),
-            RoundedCornerShape(24.dp)).padding(20.dp)) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("YOUR COMEBACK STARTS HERE", color = Violet, fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
-                Text("Find the feeling\nthat got you into anime.", color = White, fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold, lineHeight = 29.sp)
-                Text("A personal space for anime, manga, and discoveries.", color = Muted, fontSize = 13.sp)
-                Button(onClick = onDiscover, colors = ButtonDefaults.buttonColors(
-                    containerColor = Violet, contentColor = Ink), shape = RoundedCornerShape(14.dp)) {
-                    Text("Explore anime", fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(6.dp))
-                    Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
-                }
+        Box(Modifier.fillMaxWidth().height(270.dp).background(Panel2, RoundedCornerShape(24.dp))) {
+            if (featured != null && featured.cover.isNotBlank()) {
+                AsyncImage(model = featured.cover, contentDescription = featured.title,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            } else {
+                Box(Modifier.fillMaxSize().background(Brush.linearGradient(
+                    listOf(Color(0xFF40336F), Color(0xFF201D36), Color(0xFF11131B)))))
             }
-        }
-        val continueWatching = library.filter { it.watchStatus == "WATCHING" }
-            .sortedByDescending { it.lastWatchedAt }.take(5)
-        SectionTitle("Continue watching", "Pick up where you left off")
-        if (continueWatching.isNotEmpty()) {
-            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                continueWatching.forEach { anime ->
-                    Row(
-                        Modifier.fillMaxWidth().clickable { onOpenLibrary() },
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        AsyncImage(model = anime.cover, contentDescription = anime.title,
-                            modifier = Modifier.size(width = 46.dp, height = 60.dp).background(Panel2, RoundedCornerShape(7.dp)))
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text(anime.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 2)
-                            Text("Episode ${anime.progress}${anime.episodes?.let { " / $it" } ?: ""}",
-                                color = Muted, fontSize = 10.sp)
-                        }
-                        Icon(Icons.Default.PlayCircle, contentDescription = "Open progress", tint = Violet)
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(
+                Color.Transparent, Color(0xF5090A10)))))
+            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(if (watching.isNotEmpty()) "WELCOME BACK" else "YOUR PERSONAL ANIME SPACE",
+                    color = Color(0xFFD2C9FF), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp)
+                Text(if (watching.isNotEmpty()) featured?.title ?: "Continue your story"
+                    else if (featured != null) "Keep your collection growing."
+                    else "Find something worth watching.",
+                    color = White, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2)
+                Text(if (watching.isNotEmpty()) "Pick up where you left off."
+                    else "Explore anime, save favorites, and make this space yours.",
+                    color = Color(0xFFE0DEEA), fontSize = 12.sp, maxLines = 2)
+                Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Button(onClick = { if (watching.isNotEmpty()) onOpenLibrary() else onDiscover() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = Ink),
+                        shape = RoundedCornerShape(12.dp)) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(Modifier.width(5.dp))
+                        Text(if (watching.isNotEmpty()) "Open library" else "Explore anime", fontWeight = FontWeight.Bold)
                     }
-                }
-                TextButton(onClick = onOpenLibrary) {
-                    Text("Update episode progress", color = Violet)
-                }
-            }
-        } else {
-            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text("Nothing in progress yet", color = White, fontWeight = FontWeight.SemiBold)
-                Text("Add an anime to your library and set its status to Watching to see it here.",
-                    color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
-                TextButton(onClick = onDiscover) { Text("Explore anime  →", color = Violet) }
-            }
-        }
-        SectionTitle("Your collection", "A quick look at your library")
-        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            ProfileStat("Anime saved", library.size.toString(), Modifier.weight(1f))
-            ProfileStat("Watching", library.count { it.watchStatus == "WATCHING" }.toString(), Modifier.weight(1f))
-            ProfileStat("Completed", library.count { it.watchStatus == "COMPLETED" }.toString(), Modifier.weight(1f))
-        }
-        val recentlyCompleted = library.filter { it.watchStatus == "COMPLETED" }
-            .sortedByDescending { it.lastWatchedAt }.take(3)
-        if (recentlyCompleted.isNotEmpty()) {
-            SectionTitle("Recently completed", "Titles you've finished")
-            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                recentlyCompleted.forEach { anime ->
-                    Row(verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        AsyncImage(model = anime.cover, contentDescription = anime.title,
-                            modifier = Modifier.size(width = 38.dp, height = 50.dp).background(Panel2, RoundedCornerShape(7.dp)))
-                        Column(Modifier.weight(1f)) {
-                            Text(anime.title, color = White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
-                            Text("Completed", color = Muted, fontSize = 10.sp)
-                        }
-                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Violet)
+                    OutlinedButton(onClick = onOpenStats, shape = RoundedCornerShape(12.dp)) {
+                        Text("My stats", color = White)
                     }
                 }
             }
         }
-        SectionTitle("Your space", "Everything in one place")
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            QuickTile("Anime", "Find series", Icons.Default.Tv, Modifier.weight(1f), onDiscover)
-            QuickTile("Manga", "Browse & read", Icons.Default.MenuBook, Modifier.weight(1f), onOpenRead)
-            QuickTile("Quests", "At your pace", Icons.Default.EmojiEvents, Modifier.weight(1f), onOpenQuests)
+        Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Continue watching", color = White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                    Text("Jump back into your current shows", color = Muted, fontSize = 11.sp)
+                }
+                TextButton(onClick = onOpenLibrary) { Text("See all", color = Violet) }
+            }
+            if (watching.isEmpty()) {
+                Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(17.dp)).padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Icon(Icons.Default.PlayCircleOutline, contentDescription = null, tint = Violet, modifier = Modifier.size(30.dp))
+                    Column {
+                        Text("Nothing playing right now", color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text("Set a title to Watching and it will appear here.", color = Muted, fontSize = 11.sp)
+                    }
+                }
+            } else {
+                watching.take(5).forEach { anime ->
+                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp))
+                        .clickable { onOpenLibrary() }.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        AsyncImage(model = anime.cover, contentDescription = anime.title,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            modifier = Modifier.size(54.dp, 70.dp).background(Panel2, RoundedCornerShape(9.dp)))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Text(anime.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
+                            Text("EPISODE " + anime.progress + (anime.episodes?.let { " / " + it } ?: ""),
+                                color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                            val fraction = if (anime.episodes != null && anime.episodes > 0)
+                                (anime.progress.toFloat() / anime.episodes).coerceIn(0f, 1f) else 0f
+                            LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().height(4.dp),
+                                color = Violet, trackColor = Panel2)
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
+                    }
+                }
+            }
         }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
+            Column {
+                Text("Your collection", color = White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                Text("A snapshot of what you've been up to", color = Muted, fontSize = 11.sp)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                DashboardStat("SAVED", library.size.toString(), Icons.Default.Bookmarks, Modifier.weight(1f))
+                DashboardStat("WATCHING", watching.size.toString(), Icons.Default.PlayCircle, Modifier.weight(1f))
+                DashboardStat("FINISHED", completed.size.toString(), Icons.Default.CheckCircle, Modifier.weight(1f))
+            }
+        }
+        if (completed.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Recently completed", color = White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                        Text("Your latest finished stories", color = Muted, fontSize = 11.sp)
+                    }
+                    TextButton(onClick = onOpenLibrary) { Text("Library", color = Violet) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                    completed.take(3).forEach { anime ->
+                        Column(Modifier.width(112.dp).clickable { onOpenLibrary() },
+                            verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            AsyncImage(model = anime.cover, contentDescription = anime.title,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier.fillMaxWidth().height(145.dp).background(Panel2, RoundedCornerShape(12.dp)))
+                            Text(anime.title, color = White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                            Text("COMPLETED", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
+            Text("Explore Anilarper", color = White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+            Text("Your library, reading list, and goals", color = Muted, fontSize = 11.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuickTile("Discover", "Find your next series", Icons.Default.Explore, Modifier.weight(1f), onDiscover)
+                QuickTile("Manga & novels", "Your reading shelf", Icons.Default.MenuBook, Modifier.weight(1f), onOpenRead)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuickTile("Quests", "Milestones and XP", Icons.Default.EmojiEvents, Modifier.weight(1f), onOpenQuests)
+                QuickTile("Statistics", "Your activity", Icons.Default.Insights, Modifier.weight(1f), onOpenStats)
+            }
+        }
+        Row(Modifier.fillMaxWidth().background(Brush.horizontalGradient(listOf(Panel2, Panel)),
+            RoundedCornerShape(17.dp)).clickable { onOpenProfile() }.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(Icons.Default.Tune, contentDescription = null, tint = Violet, modifier = Modifier.size(23.dp))
             Column(Modifier.weight(1f)) {
-                SectionTitle("Your activity", "See how your collection is growing")
+                Text("Make it yours", color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text("Customize your profile and personal space", color = Muted, fontSize = 11.sp)
             }
-            TextButton(onClick = onOpenStats) { Text("View stats", color = Violet) }
+            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
         }
-                SectionTitle("A little inspiration", "No pressure. Just discovery.")
-        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("START WITH WHAT YOU LIKE", color = Violet, fontSize = 10.sp,
-                fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-            Text("Your next favorite is out there.", color = White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-            Text("Browse trending anime, search for a specific title, and save anything that catches your interest.",
-                color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
-            TextButton(onClick = onDiscover) { Text("Open discovery  →", color = Violet) }
-        }
-        SectionTitle("Building Anilarper", "The first working modules")
-        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp)) {
-            FeatureLine("Live anime catalog and search")
-            FeatureLine("Personal saved library")
-            FeatureLine("Manga tracking and recommendations")
-            FeatureLine("XP, quests, and achievements")
-            FeatureLine("MAL list import")
-        }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(14.dp))
     }
 }
 
+@Composable
+private fun DashboardStat(label: String, value: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier = Modifier) {
+    Column(modifier.background(Panel, RoundedCornerShape(15.dp)).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(icon, contentDescription = null, tint = Violet, modifier = Modifier.size(18.dp))
+        Text(value, color = White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
+    }
+}
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, onToggleSaved: (Anime) -> Unit) {
