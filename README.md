@@ -56,3 +56,12 @@ Design references are used for general UX patterns only. Anilarper uses its own 
 - No streaks, daily deadlines, or penalties for taking breaks.
 
 Profile settings and quest progress are stored locally. Avatar images are loaded from the URL you provide.
+
+
+### Music and navigation follow-up
+
+- The Music area now supports saving HTTPS listening links (YouTube, SoundCloud, Spotify, Apple Music, YouTube Music, and other services) and opening them through the service's official app or website.
+- Existing local audio-file playback remains available.
+- The bottom navigation is reduced to Home, Discover, Library, and More. Read, Music, Quests, and Profile are grouped in a bottom sheet to reduce crowding on phones.
+
+Streaming links are bookmarks/launch points; they are not downloaded or re-hosted by Anilarper. In-app playback for third-party services requires each service's permitted player/embed integration and is a separate follow-up.
