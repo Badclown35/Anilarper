@@ -3,6 +3,7 @@ package app.anilarper.personal
 import android.content.Context
 import android.content.Intent
 import android.media.MediaPlayer
+import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -923,6 +924,58 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
     var linkTitle by remember { mutableStateOf("") }
     var linkUrl by remember { mutableStateOf("") }
     var links by remember { mutableStateOf(loadMusicLinks(context)) }
+    var preparing by remember { mutableStateOf(false) }
+    fun startTrack(track: LocalTrack) {
+        runCatching {
+            player?.release()
+            player = null
+            playing = false
+            preparing = true
+            val next = MediaPlayer()
+            next.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            next.setDataSource(context, Uri.parse(track.uri))
+            next.setOnPreparedListener { prepared ->
+                if (player === prepared) {
+                    preparing = false
+                    prepared.start()
+                    playing = true
+                    message = null
+                }
+            }
+            next.setOnCompletionListener { completed ->
+                if (repeatOneLatest) {
+                    completed.seekTo(0)
+                    completed.start()
+                } else {
+                    playing = false
+                }
+            }
+            next.setOnErrorListener { failed, _, _ ->
+                if (player === failed) {
+                    preparing = false
+                    playing = false
+                    player = null
+                    message = "This audio file couldn't be played. Try another file format or re-add the file."
+                }
+                true
+            }
+            player = next
+            current = track.uri
+            message = "Preparing audio…"
+            next.prepareAsync()
+        }.onFailure {
+            preparing = false
+            playing = false
+            player?.release()
+            player = null
+            message = it.message ?: "Unable to open this audio file."
+        }
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -996,21 +1049,17 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
                 items(tracks, key = { it.uri }) { track ->
                     Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(13.dp)).clickable {
                         if (current == track.uri && player != null) {
-                            if (playing) { player?.pause(); playing = false } else { player?.start(); playing = true }
+                            if (preparing) {
+                                message = "Audio is still preparing…"
+                            } else if (playing) {
+                                player?.pause()
+                                playing = false
+                            } else {
+                                runCatching { player?.start(); playing = true }
+                                    .onFailure { startTrack(track) }
+                            }
                         } else {
-                            runCatching {
-                                player?.release()
-                                val next = MediaPlayer.create(context, Uri.parse(track.uri)) ?: error("Audio file couldn't be opened.")
-                                next.setOnCompletionListener { completed ->
-                                    if (repeatOneLatest) {
-                                        completed.seekTo(0)
-                                        completed.start()
-                                    } else {
-                                        playing = false
-                                    }
-                                }
-                                player = next; current = track.uri; next.start(); playing = true; message = null
-                            }.onFailure { message = it.message ?: "Unable to play this file." }
+                            startTrack(track)
                         }
                     }.padding(13.dp), verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1038,7 +1087,7 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
             Row(Modifier.fillMaxWidth().background(Panel2, RoundedCornerShape(14.dp)).padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("NOW PLAYING · LOCAL", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text(if (preparing) "PREPARING · LOCAL AUDIO" else "NOW PLAYING · LOCAL", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                     Text(tracks.firstOrNull { it.uri == current }?.title ?: "Audio track", color = White, fontSize = 12.sp, maxLines = 1)
                 }
                 IconButton(onClick = { if (playing) { player?.pause(); playing = false } else { player?.start(); playing = true } }) {
