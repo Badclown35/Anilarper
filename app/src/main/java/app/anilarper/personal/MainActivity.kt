@@ -43,6 +43,7 @@ import app.anilarper.personal.ui.stats.StatisticsScreen
 import app.anilarper.personal.ui.profile.ProfileScreen
 import app.anilarper.personal.ui.extras.CustomListsScreen
 import app.anilarper.personal.ui.extras.RecommendationsScreen
+import app.anilarper.personal.ui.extras.MalImportScreen
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -132,6 +133,7 @@ private fun AnilarperApp() {
                 }
                 composable("CustomLists") { CustomListsScreen(library, Modifier.fillMaxSize()) }
                 composable("Recommendations") { RecommendationsScreen(library, { animeViewModel.toggle(it) }, Modifier.fillMaxSize()) }
+                composable("MALImport") { MalImportScreen({ animeViewModel.toggle(it) }, Modifier.fillMaxSize()) }
                 composable("Library") {
                     LibraryScreen(Modifier.fillMaxSize(), library,
                         onRemove = { animeViewModel.remove(it) },
@@ -174,7 +176,8 @@ private fun AnilarperApp() {
                         Triple("Backup", "Export or restore your collection", Icons.Default.Backup),
                         Triple("Profile", "Your personal space", Icons.Default.Person),
                         Triple("CustomLists", "Your own anime collections", Icons.Default.Bookmarks),
-                        Triple("Recommendations", "Find your next favorite", Icons.Default.AutoAwesome)
+                        Triple("Recommendations", "Find your next favorite", Icons.Default.AutoAwesome),
+                        Triple("MALImport", "Bring over a MAL anime CSV", Icons.Default.FileDownload)
                     ).forEach { (label, subtitle, icon) ->
                         Row(Modifier.fillMaxWidth().clickable { navController.navigate(label) { launchSingleTop = true }; moreOpen = false }
                             .background(Panel2, RoundedCornerShape(14.dp)).padding(15.dp),
