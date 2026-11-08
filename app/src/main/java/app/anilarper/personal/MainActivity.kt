@@ -72,7 +72,7 @@ private fun AnilarperApp() {
                     listOf("Home" to Icons.Default.Home, "Discover" to Icons.Default.Explore,
                         "Library" to Icons.Default.Bookmarks, "More" to Icons.Default.MoreHoriz).forEach { (label, icon) ->
                         NavigationBarItem(
-                            selected = if (label == "More") selected in setOf("Read", "Music", "Quests", "Profile") else selected == label,
+                            selected = if (label == "More") selected in setOf("Read", "Music", "Quests", "Profile", "Stats") else selected == label,
                             onClick = { if (label == "More") moreOpen = true else selected = label },
                             icon = { Icon(icon, contentDescription = label) },
                             label = { Text(label, fontSize = 11.sp, maxLines = 1) },
@@ -121,6 +121,7 @@ private fun AnilarperApp() {
                 )
                 "Music" -> MusicScreen(Modifier.padding(padding))
                 "Quests" -> QuestScreen(context, library, readingLibrary, Modifier.padding(padding))
+                "Stats" -> StatisticsScreen(library, readingLibrary, Modifier.padding(padding))
                 else -> ProfileScreen(context, library, readingLibrary, Modifier.padding(padding))
             }
         }
@@ -134,6 +135,7 @@ private fun AnilarperApp() {
                         Triple("Read", "Manga & light novels", Icons.Default.MenuBook),
                         Triple("Music", "Your soundtrack sources", Icons.Default.LibraryMusic),
                         Triple("Quests", "Milestones & XP", Icons.Default.EmojiEvents),
+                        Triple("Stats", "Your anime and reading activity", Icons.Default.Insights),
                         Triple("Profile", "Your personal space", Icons.Default.Person)
                     ).forEach { (label, subtitle, icon) ->
                         Row(Modifier.fillMaxWidth().clickable { selected = label; moreOpen = false }
@@ -953,6 +955,43 @@ private fun QuestScreen(context: Context, library: List<Anime>,
             }
         }
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun StatisticsScreen(library: List<Anime>, readingLibrary: List<ReadingTitle>, modifier: Modifier = Modifier) {
+    val completed = library.count { it.watchStatus == "COMPLETED" }
+    val watching = library.count { it.watchStatus == "WATCHING" }
+    val planning = library.count { it.watchStatus == "PLANNING" }
+    val episodes = library.sumOf { it.progress }
+    val manga = readingLibrary.count { it.kind != "NOVEL" }
+    val novels = readingLibrary.count { it.kind == "NOVEL" }
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(13.dp)) {
+        Spacer(Modifier.height(8.dp))
+        Text("YOUR ACTIVITY", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        Text("Collection statistics", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text("A snapshot of the progress saved on this device.", color = Muted, fontSize = 12.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            ProfileStat("Anime saved", library.size.toString(), Modifier.weight(1f))
+            ProfileStat("Episodes", episodes.toString(), Modifier.weight(1f))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            ProfileStat("Completed", completed.toString(), Modifier.weight(1f))
+            ProfileStat("Watching", watching.toString(), Modifier.weight(1f))
+            ProfileStat("Planning", planning.toString(), Modifier.weight(1f))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            ProfileStat("Manga", manga.toString(), Modifier.weight(1f))
+            ProfileStat("Light novels", novels.toString(), Modifier.weight(1f))
+        }
+        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(15.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("PROGRESS OVERVIEW", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Text(if (library.isEmpty() && readingLibrary.isEmpty()) "Add titles to your library to start building your statistics."
+                else "You have saved ${library.size} anime and ${readingLibrary.size} reading titles. Your progress is stored locally.",
+                color = White, fontSize = 12.sp)
+        }
     }
 }
 
