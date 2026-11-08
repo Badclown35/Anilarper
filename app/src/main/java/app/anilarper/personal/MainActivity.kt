@@ -999,7 +999,8 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
             message = "Added to your local soundtrack library."
         }
     }
-    DisposableEffect(player) { onDispose { player?.release() } }
+    val playerRef by rememberUpdatedState(player)
+    DisposableEffect(Unit) { onDispose { playerRef?.release() } }
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(18.dp))
         Text("ANILARPER AUDIO", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
