@@ -816,7 +816,14 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
                             runCatching {
                                 player?.release()
                                 val next = MediaPlayer.create(context, Uri.parse(track.uri)) ?: error("Audio file couldn't be opened.")
-                                next.setOnCompletionListener { completed ->\n                    if (repeatOneLatest) { completed.seekTo(0); completed.start() } else playing = false\n                }
+                                next.setOnCompletionListener { completed ->
+                                    if (repeatOneLatest) {
+                                        completed.seekTo(0)
+                                        completed.start()
+                                    } else {
+                                        playing = false
+                                    }
+                                }
                                 player = next; current = track.uri; next.start(); playing = true; message = null
                             }.onFailure { message = it.message ?: "Unable to play this file." }
                         }
