@@ -18,23 +18,27 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONArray
 import org.json.JSONObject
+import app.anilarper.personal.data.LibraryRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun BackupScreen(context: Context, modifier: Modifier = Modifier, onRestored: () -> Unit = {}) {
     var message by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val repository = remember(context) { LibraryRepository(context.applicationContext) }
     var confirmRestore by remember { mutableStateOf<Uri?>(null) }
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
-            val prefs = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE)
-            val backup = JSONObject()
-                .put("format", "anilarper-backup")
-                .put("version", 1)
-                .put("preferences", JSONObject(prefs.all))
-            runCatching {
-                context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(backup.toString(2)) }
-                    ?: error("Couldn't open the backup file for writing.")
-            }.onSuccess { message = "Backup exported successfully." }
-                .onFailure { message = it.message ?: "Backup export failed." }
+            scope.launch {
+                runCatching {
+                    val backup = withContext(Dispatchers.IO) { repository.createBackup() }
+                    context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(backup.toString(2)) }
+                        ?: error("Couldn't open the backup file for writing.")
+                }.onSuccess { message = "Backup exported successfully." }
+                    .onFailure { message = it.message ?: "Backup export failed." }
+            }
         }
     }
     val import = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
