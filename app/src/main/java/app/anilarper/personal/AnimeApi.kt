@@ -20,6 +20,7 @@ data class Anime(
     val description: String,
     val watchStatus: String = "PLANNING",
     val progress: Int = 0,
+    val lastWatchedAt: Long = 0L,
     val season: String = "",
     val seasonYear: Int? = null,
     val genres: List<String> = emptyList(),
