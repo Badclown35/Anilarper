@@ -1,11 +1,8 @@
 package app.anilarper.personal.ui.music
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.media.MediaPlayer
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,11 +22,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import app.anilarper.personal.playback.PlaybackService
 import app.anilarper.personal.theme.*
-import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
-import app.anilarper.personal.*
+import java.util.concurrent.Executor
 
 @Composable
 fun MusicScreen(modifier: Modifier = Modifier) {
@@ -38,92 +40,108 @@ fun MusicScreen(modifier: Modifier = Modifier) {
     var savedTracks by remember { mutableStateOf(loadTracks(context)) }
     var tracks by remember { mutableStateOf(savedTracks.let { if (shuffle) it.shuffled() else it }) }
     var repeatOne by remember { mutableStateOf(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getBoolean("musicRepeatOne", false)) }
-    val repeatOneLatest by rememberUpdatedState(repeatOne)
     var current by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(false) }
-    var player by remember { mutableStateOf<MediaPlayer?>(null) }
-    val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
-    val focusRequest = remember {
-        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-            .setOnAudioFocusChangeListener { change ->
-                if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
-                    runCatching { player?.pause() }
-                    playing = false
-                }
-            }.build()
-    }
+    var preparing by remember { mutableStateOf(false) }
+    var player by remember { mutableStateOf<MediaController?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     var showLinkDialog by remember { mutableStateOf(false) }
     var linkTitle by remember { mutableStateOf("") }
     var linkUrl by remember { mutableStateOf("") }
     var links by remember { mutableStateOf(loadMusicLinks(context)) }
-    var preparing by remember { mutableStateOf(false) }
-    fun startTrack(track: LocalTrack) {
-        runCatching {
+
+    val sessionToken = remember(context) {
+        SessionToken(context, ComponentName(context, PlaybackService::class.java))
+    }
+    val controllerFuture = remember(sessionToken) {
+        MediaController.Builder(context, sessionToken).buildAsync()
+    }
+    DisposableEffect(controllerFuture) {
+        controllerFuture.addListener({
+            runCatching { controllerFuture.get() }
+                .onSuccess { player = it }
+                .onFailure { message = "The audio service couldn't be started." }
+        }, Executor { command -> command.run() })
+        onDispose {
             player?.release()
-            player = null
-            playing = false
-            preparing = true
-            val next = MediaPlayer()
-            next.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
-            next.setDataSource(context, Uri.parse(track.uri))
-            next.setOnPreparedListener { prepared ->
-                if (player === prepared) {
-                    if (audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-                        prepared.start()
-                        playing = true
-                        message = null
-                    } else {
+            MediaController.releaseFuture(controllerFuture)
+        }
+    }
+
+    DisposableEffect(player) {
+        val controller = player
+        if (controller == null) {
+            onDispose { }
+        } else {
+            val listener = object : Player.Listener {
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    playing = isPlaying
+                }
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    preparing = playbackState == Player.STATE_BUFFERING
+                    if (playbackState == Player.STATE_IDLE && controller.currentMediaItem == null) {
+                        current = null
                         playing = false
-                        message = "Couldn't get audio focus."
                     }
-                    preparing = false
                 }
-            }
-            next.setOnCompletionListener { completed ->
-                if (repeatOneLatest) {
-                    completed.seekTo(0)
-                    completed.start()
-                } else {
-                    val index = tracks.indexOfFirst { it.uri == track.uri }
-                    val queuedNext = tracks.getOrNull(index + 1)
-                    if (queuedNext != null) startTrack(queuedNext) else playing = false
+
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    current = mediaItem?.mediaId
                 }
-            }
-            next.setOnErrorListener { failed, what, extra ->
-                if (player === failed) {
+
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                     preparing = false
                     playing = false
-                    player = null
-                    message = "This audio file couldn't be played (code $what/$extra). Try another format or re-add it."
+                    message = error.message ?: "This audio file couldn't be played."
                 }
-                runCatching { failed.release() }
-                true
             }
-            player = next
-            current = track.uri
+            controller.addListener(listener)
+            current = controller.currentMediaItem?.mediaId
+            playing = controller.isPlaying
+            preparing = controller.playbackState == Player.STATE_BUFFERING
+            onDispose { controller.removeListener(listener) }
+        }
+    }
+
+    LaunchedEffect(player, repeatOne, shuffle) {
+        player?.repeatMode = if (repeatOne) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        player?.shuffleModeEnabled = shuffle
+    }
+
+    fun startTrack(track: LocalTrack) {
+        val controller = player
+        if (controller == null) {
+            message = "Connecting to the audio service…"
+            return
+        }
+        runCatching {
+            val index = tracks.indexOfFirst { it.uri == track.uri }
+            require(index >= 0) { "This track is no longer in your library." }
+            val queue = tracks.map { item ->
+                MediaItem.Builder()
+                    .setMediaId(item.uri)
+                    .setUri(Uri.parse(item.uri))
+                    .setMediaMetadata(MediaMetadata.Builder().setTitle(item.title).build())
+                    .build()
+            }
+            controller.setMediaItems(queue, index, 0L)
+            controller.prepare()
+            controller.play()
             message = "Preparing audio…"
-            next.prepareAsync()
         }.onFailure {
-            runCatching { player?.release() }
             preparing = false
             playing = false
-            player = null
             message = it.message ?: "Unable to open this audio file."
         }
     }
+
     fun playAdjacent(offset: Int) {
-        val index = tracks.indexOfFirst { it.uri == current }
-        val target = tracks.getOrNull(index + offset)
-        if (target != null) startTrack(target)
+        val controller = player ?: return
+        if (offset < 0 && controller.hasPreviousMediaItem()) controller.seekToPreviousMediaItem()
+        if (offset > 0 && controller.hasNextMediaItem()) controller.seekToNextMediaItem()
     }
+
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -140,11 +158,7 @@ fun MusicScreen(modifier: Modifier = Modifier) {
             message = "Added to your local soundtrack library."
         }
     }
-    val playerRef by rememberUpdatedState(player)
-    DisposableEffect(Unit) { onDispose {
-        playerRef?.release()
-        audioManager.abandonAudioFocusRequest(focusRequest)
-    } }
+
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(18.dp))
         Text("ANILARPER AUDIO", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
@@ -208,27 +222,29 @@ fun MusicScreen(modifier: Modifier = Modifier) {
                 item { Text("LOCAL AUDIO FILES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
                 items(tracks, key = { it.uri }) { track ->
                     Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(13.dp)).clickable {
-                        if (current == track.uri && player != null) {
-                            if (preparing) {
-                                message = "Audio is still preparing…"
-                            } else if (playing) {
-                                player?.pause()
-                                playing = false
-                            } else {
-                                runCatching { player?.start(); playing = true }
-                                    .onFailure { startTrack(track) }
-                            }
-                        } else {
-                            startTrack(track)
-                        }
+                        val controller = player
+                        if (current == track.uri && controller != null) {
+                            if (preparing) message = "Audio is still preparing…"
+                            else if (playing) controller.pause() else controller.play()
+                        } else startTrack(track)
                     }.padding(13.dp), verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Icon(if (current == track.uri && playing) Icons.Default.PauseCircle else Icons.Default.PlayCircle,
                             contentDescription = "Play " + track.title, tint = Violet, modifier = Modifier.size(30.dp))
                         Text(track.title, color = White, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 2)
                         IconButton(onClick = {
-                            if (current == track.uri) { player?.release(); player = null; current = null; playing = false }
-                            tracks = tracks.filterNot { it.uri == track.uri }; persistTracks(context, tracks)
+                            val index = tracks.indexOfFirst { it.uri == track.uri }
+                            if (index >= 0 && player?.mediaItemCount?.let { index < it } == true) {
+                                player?.removeMediaItem(index)
+                            }
+                            if (current == track.uri && player?.mediaItemCount == 0) {
+                                player?.stop()
+                                current = null
+                                playing = false
+                            }
+                            tracks = tracks.filterNot { it.uri == track.uri }
+                            savedTracks = savedTracks.filterNot { it.uri == track.uri }
+                            persistTracks(context, savedTracks)
                         }) { Icon(Icons.Default.DeleteOutline, contentDescription = "Remove track", tint = Muted) }
                     }
                 }
@@ -250,17 +266,16 @@ fun MusicScreen(modifier: Modifier = Modifier) {
                     Text(if (preparing) "PREPARING · LOCAL AUDIO" else "NOW PLAYING · LOCAL", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                     Text(tracks.firstOrNull { it.uri == current }?.title ?: "Audio track", color = White, fontSize = 12.sp, maxLines = 1)
                 }
-                IconButton(onClick = { playAdjacent(-1) }, enabled = tracks.indexOfFirst { it.uri == current } > 0) {
+                IconButton(onClick = { playAdjacent(-1) }, enabled = player?.hasPreviousMediaItem() == true) {
                     Icon(Icons.Default.SkipPrevious, contentDescription = "Previous track", tint = Violet)
                 }
                 IconButton(onClick = {
                     if (preparing) message = "Audio is still preparing…"
-                    else if (playing) { player?.pause(); playing = false }
-                    else runCatching { player?.start(); playing = true }.onFailure { message = "Playback is unavailable. Try selecting the track again." }
-                }, enabled = !preparing) {
+                    else if (playing) player?.pause() else player?.play()
+                }, enabled = !preparing && player != null) {
                     Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause", tint = Violet)
                 }
-                IconButton(onClick = { playAdjacent(1) }, enabled = tracks.indexOfFirst { it.uri == current } < tracks.lastIndex) {
+                IconButton(onClick = { playAdjacent(1) }, enabled = player?.hasNextMediaItem() == true) {
                     Icon(Icons.Default.SkipNext, contentDescription = "Next track", tint = Violet)
                 }
             }
