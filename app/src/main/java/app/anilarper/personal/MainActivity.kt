@@ -54,6 +54,7 @@ import androidx.lifecycle.ViewModelProvider
 import app.anilarper.personal.data.AnimeLibraryViewModel
 import app.anilarper.personal.data.ReadingLibraryViewModel
 import app.anilarper.personal.data.CollectionViewModelFactory
+import app.anilarper.personal.data.DiscoverViewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -87,6 +88,9 @@ private fun AnilarperApp() {
     }
     val readingViewModel = remember(activity) {
         ViewModelProvider(activity, collectionFactory)[ReadingLibraryViewModel::class.java]
+    }
+    val discoverViewModel = remember(activity) {
+        ViewModelProvider(activity)[DiscoverViewModel::class.java]
     }
     val library by animeViewModel.library.collectAsState()
     val readingLibrary by readingViewModel.library.collectAsState()
@@ -141,9 +145,9 @@ private fun AnilarperApp() {
                         onOpenProfile = { navController.navigate("Profile") { launchSingleTop = true } })
                 }
                 composable("Discover") {
-                    DiscoverScreen(Modifier.fillMaxSize(), library.map { it.id }.toSet()) { anime ->
-                        animeViewModel.toggle(anime)
-                    }
+                    DiscoverScreen(
+                        Modifier.fillMaxSize(), library.map { it.id }.toSet(), discoverViewModel
+                    ) { anime -> animeViewModel.toggle(anime) }
                 }
                 composable("Library") {
                     LibraryScreen(Modifier.fillMaxSize(), library,
