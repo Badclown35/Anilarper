@@ -95,11 +95,9 @@ private class SharedPreferencesImportCallback(
     override fun onCreate(db: SupportSQLiteDatabase) {
         super.onCreate(db)
         val preferences = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE)
-        if (preferences.getBoolean("roomMigrationV1Complete", false)) return
 
         importArray(db, preferences.getString("library", "[]"), "anime")
         importArray(db, preferences.getString("readingLibrary", "[]"), "reading")
-        preferences.edit().putBoolean("roomMigrationV1Complete", true).commit()
     }
 
     private fun importArray(db: SupportSQLiteDatabase, raw: String?, type: String) {
