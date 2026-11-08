@@ -1637,7 +1637,7 @@ private fun ProfileStat(label: String, value: String, modifier: Modifier = Modif
 private data class LocalTrack(val uri: String, val title: String)
 
 private fun loadTracks(context: Context): List<LocalTrack> {
-    val array = runCatching { JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("tracks", "[]") ?: "[]" }.getOrNull()
+    val array = runCatching { JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("tracks", "[]") ?: "[]") }.getOrNull()
         ?: return emptyList()
     return (0 until array.length()).mapNotNull { i -> runCatching {
         val item = array.getJSONObject(i)
@@ -1652,7 +1652,7 @@ private fun persistTracks(context: Context, tracks: List<LocalTrack>) {
 }
 
 private fun loadReadingLibrary(context: Context): List<ReadingTitle> {
-    val array = runCatching { JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("readingLibrary", "[]") ?: "[]" }.getOrNull()
+    val array = runCatching { JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("readingLibrary", "[]") ?: "[]") }.getOrNull()
         ?: return emptyList()
     return (0 until array.length()).mapNotNull { i -> runCatching {
         val o = array.getJSONObject(i)
@@ -1722,7 +1722,7 @@ private fun FeatureLine(text: String) {
 }
 
 private fun loadLibrary(context: Context): List<Anime> {
-    val array = runCatching { JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("library", "[]") ?: "[]" }.getOrNull()
+    val array = runCatching { JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("library", "[]") ?: "[]") }.getOrNull()
         ?: return emptyList()
     return (0 until array.length()).mapNotNull { i -> runCatching {
         val o = array.getJSONObject(i)
