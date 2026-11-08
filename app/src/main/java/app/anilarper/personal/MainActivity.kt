@@ -952,7 +952,9 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
                     completed.seekTo(0)
                     completed.start()
                 } else {
-                    playing = false
+                    val index = tracks.indexOfFirst { it.uri == track.uri }
+                    val queuedNext = tracks.getOrNull(index + 1)
+                    if (queuedNext != null) startTrack(queuedNext) else playing = false
                 }
             }
             next.setOnErrorListener { failed, _, _ ->
@@ -975,6 +977,11 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
             player = null
             message = it.message ?: "Unable to open this audio file."
         }
+    }
+    fun playAdjacent(offset: Int) {
+        val index = tracks.indexOfFirst { it.uri == current }
+        val target = tracks.getOrNull(index + offset)
+        if (target != null) startTrack(target)
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -1090,11 +1097,18 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
                     Text(if (preparing) "PREPARING · LOCAL AUDIO" else "NOW PLAYING · LOCAL", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                     Text(tracks.firstOrNull { it.uri == current }?.title ?: "Audio track", color = White, fontSize = 12.sp, maxLines = 1)
                 }
-                IconButton(onClick = { if (playing) { player?.pause(); playing = false } else { player?.start(); playing = true } }) {
+                IconButton(onClick = { playAdjacent(-1) }, enabled = tracks.indexOfFirst { it.uri == current } > 0) {
+                    Icon(Icons.Default.SkipPrevious, contentDescription = "Previous track", tint = Violet)
+                }
+                IconButton(onClick = {
+                    if (preparing) message = "Audio is still preparing…"
+                    else if (playing) { player?.pause(); playing = false }
+                    else runCatching { player?.start(); playing = true }.onFailure { message = "Playback is unavailable. Try selecting the track again." }
+                }, enabled = !preparing) {
                     Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause", tint = Violet)
                 }
-                IconButton(onClick = { player?.seekTo(0); if (!playing) { player?.start(); playing = true } }) {
-                    Icon(Icons.Default.Replay, contentDescription = "Restart track", tint = Violet)
+                IconButton(onClick = { playAdjacent(1) }, enabled = tracks.indexOfFirst { it.uri == current } < tracks.lastIndex) {
+                    Icon(Icons.Default.SkipNext, contentDescription = "Next track", tint = Violet)
                 }
             }
         }
