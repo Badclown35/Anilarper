@@ -1212,13 +1212,10 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
 
 private data class MusicLink(val title: String, val url: String, val source: String)
 
-private fun loadMusicLinks(context: Context): List<MusicLink> = try {
-    val a = JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("musicLinks", "[]") ?: "[]")
-    (0 until a.length()).map { i ->
-        val o = a.getJSONObject(i)
+private fun loadMusicLinks(context: Context): List<MusicLink> =
+    readJsonArray(context, "musicLinks")?.mapSafe { o ->
         MusicLink(o.getString("title"), o.getString("url"), o.getString("source"))
-    }
-} catch (_: Exception) { emptyList() }
+    } ?: emptyList()
 
 private fun persistMusicLinks(context: Context, links: List<MusicLink>) {
     val a = JSONArray()
