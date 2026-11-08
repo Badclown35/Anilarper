@@ -726,9 +726,10 @@ private fun ReadingScreen(
 @Composable
 private fun MusicScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    var tracks by remember { mutableStateOf(loadTracks(context)) }
     var shuffle by remember { mutableStateOf(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getBoolean("musicShuffle", false)) }
+    var tracks by remember { mutableStateOf(loadTracks(context).let { if (shuffle) it.shuffled() else it }) }
     var repeatOne by remember { mutableStateOf(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getBoolean("musicRepeatOne", false)) }
+    val repeatOneLatest by rememberUpdatedState(repeatOne)
     var current by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(false) }
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
@@ -798,7 +799,7 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
                             runCatching {
                                 player?.release()
                                 val next = MediaPlayer.create(context, Uri.parse(track.uri)) ?: error("Audio file couldn't be opened.")
-                                next.setOnCompletionListener { completed ->\n                    if (repeatOne) { completed.seekTo(0); completed.start() } else playing = false\n                }
+                                next.setOnCompletionListener { completed ->\n                    if (repeatOneLatest) { completed.seekTo(0); completed.start() } else playing = false\n                }
                                 player = next; current = track.uri; next.start(); playing = true; message = null
                             }.onFailure { message = it.message ?: "Unable to play this file." }
                         }
