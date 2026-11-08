@@ -30,6 +30,7 @@ import app.anilarper.personal.data.AnimeLibraryViewModel
 import app.anilarper.personal.data.ReadingLibraryViewModel
 import app.anilarper.personal.data.CollectionViewModelFactory
 import app.anilarper.personal.data.DiscoverViewModel
+import app.anilarper.personal.data.ReadingSearchViewModel
 import app.anilarper.personal.ui.home.HomeScreen
 import app.anilarper.personal.ui.reading.ReadingScreen
 import app.anilarper.personal.ui.library.LibraryScreen
@@ -64,6 +65,9 @@ private fun AnilarperApp() {
     }
     val discoverViewModel = remember(activity) {
         ViewModelProvider(activity)[DiscoverViewModel::class.java]
+    }
+    val readingSearchViewModel = remember(activity) {
+        ViewModelProvider(activity)[ReadingSearchViewModel::class.java]
     }
     val library by animeViewModel.library.collectAsState()
     val readingLibrary by readingViewModel.library.collectAsState()
@@ -128,7 +132,7 @@ private fun AnilarperApp() {
                         onUpdate = { animeViewModel.update(it) })
                 }
                 composable("Read") {
-                    ReadingScreen(Modifier.fillMaxSize(), readingLibrary,
+                    ReadingScreen(Modifier.fillMaxSize(), readingLibrary, readingSearchViewModel,
                         onAdd = { readingViewModel.add(it) },
                         onUpdate = { readingViewModel.update(it) },
                         onRemove = { readingViewModel.remove(it) })
