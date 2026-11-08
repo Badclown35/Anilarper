@@ -22,7 +22,6 @@ import androidx.compose.ui.text.font.FontWeight
 import app.anilarper.personal.theme.*
 import coil.compose.AsyncImage
 import app.anilarper.personal.Anime
-import app.anilarper.personal.QuickTile
 
 @Composable
 fun HomeScreen(
@@ -196,5 +195,17 @@ internal fun DashboardStat(label: String, value: String,
         Icon(icon, contentDescription = null, tint = Violet, modifier = Modifier.size(18.dp))
         Text(value, color = White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text(label, color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
+    }
+}
+
+@Composable
+private fun QuickTile(title: String, subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Column(modifier.background(Panel, RoundedCornerShape(16.dp)).clickable(onClick = onClick).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Icon(icon, contentDescription = null, tint = Violet, modifier = Modifier.size(22.dp))
+        Text(title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+        Text(subtitle, color = Muted, fontSize = 10.sp, lineHeight = 13.sp)
     }
 }
