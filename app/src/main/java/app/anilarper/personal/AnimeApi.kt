@@ -16,7 +16,9 @@ data class Anime(
     val status: String,
     val episodes: Int?,
     val score: Int?,
-    val description: String
+    val description: String,
+    val watchStatus: String = "PLANNING",
+    val progress: Int = 0
 )
 
 object AniListApi {
