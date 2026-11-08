@@ -1,0 +1,93 @@
+package app.anilarper.personal.data
+
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+import app.anilarper.personal.Anime
+import app.anilarper.personal.ReadingTitle
+
+/**
+ * Single owner for the persisted anime and reading collections.
+ * SharedPreferences remains the backing store during the Phase 2 refactor;
+ * Phase 3 will migrate this repository to Room.
+ */
+class LibraryRepository(context: Context) {
+    private val preferences = context.applicationContext
+        .getSharedPreferences("anilarper", Context.MODE_PRIVATE)
+
+    fun loadAnime(): List<Anime> = readArray("library")?.mapNotNull { o ->
+        runCatching {
+            Anime(
+                o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
+                o.optString("format"), o.optString("status"),
+                if (o.isNull("episodes")) null else o.optInt("episodes"),
+                if (o.isNull("score")) null else o.optInt("score"), o.optString("description"),
+                o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0), o.optLong("lastWatchedAt", 0L),
+                o.optString("season"),
+                if (!o.has("seasonYear") || o.isNull("seasonYear")) null else o.optInt("seasonYear"),
+                o.optJSONArray("genres").toStrings(), o.optJSONArray("studios").toStrings()
+            )
+        }.getOrNull()
+    } ?: emptyList()
+
+    fun saveAnime(items: List<Anime>) {
+        val array = JSONArray()
+        items.forEach { anime ->
+            array.put(JSONObject()
+                .put("id", anime.id).put("title", anime.title).put("nativeTitle", anime.nativeTitle)
+                .put("cover", anime.cover).put("format", anime.format).put("status", anime.status)
+                .put("episodes", anime.episodes).put("score", anime.score).put("description", anime.description)
+                .put("watchStatus", anime.watchStatus).put("progress", anime.progress)
+                .put("lastWatchedAt", anime.lastWatchedAt).put("season", anime.season)
+                .put("seasonYear", anime.seasonYear).put("genres", JSONArray(anime.genres))
+                .put("studios", JSONArray(anime.studios)))
+        }
+        check(preferences.edit().putString("library", array.toString()).commit()) {
+            "Couldn't save anime library."
+        }
+    }
+
+    fun loadReading(): List<ReadingTitle> = readArray("readingLibrary")?.mapNotNull { o ->
+        runCatching {
+            ReadingTitle(
+                o.getInt("id"), o.getString("title"), o.optString("nativeTitle"), o.optString("cover"),
+                o.optString("format"), o.optString("status"),
+                if (o.isNull("chapters")) null else o.optInt("chapters"),
+                if (o.isNull("volumes")) null else o.optInt("volumes"), o.optString("description"),
+                o.optString("kind", "MANGA"), o.optInt("progress"), o.optInt("volumeProgress"),
+                o.optString("readingStatus", "PLANNING")
+            )
+        }.getOrNull()
+    } ?: emptyList()
+
+    fun saveReading(items: List<ReadingTitle>) {
+        val array = JSONArray()
+        items.forEach { item ->
+            array.put(JSONObject()
+                .put("id", item.id).put("title", item.title).put("nativeTitle", item.nativeTitle)
+                .put("cover", item.cover).put("format", item.format).put("status", item.status)
+                .put("chapters", item.chapters).put("volumes", item.volumes)
+                .put("description", item.description).put("kind", item.kind)
+                .put("progress", item.progress).put("volumeProgress", item.volumeProgress)
+                .put("readingStatus", item.readingStatus))
+        }
+        check(preferences.edit().putString("readingLibrary", array.toString()).commit()) {
+            "Couldn't save reading library."
+        }
+    }
+
+    private fun readArray(key: String): List<JSONObject>? {
+        val raw = preferences.getString(key, "[]") ?: "[]"
+        val array = runCatching { JSONArray(raw) }.getOrElse {
+            preferences.edit().putString("${key}_corrupt_backup", raw).apply()
+            return null
+        }
+        return (0 until array.length()).mapNotNull { index ->
+            runCatching { array.getJSONObject(index) }.getOrNull()
+        }
+    }
+
+    private fun JSONArray?.toStrings(): List<String> =
+        if (this == null) emptyList()
+        else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+}
