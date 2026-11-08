@@ -71,7 +71,6 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, viewModel:
     var query by rememberSaveable { mutableStateOf("") }
     val cache by viewModel.cache.collectAsState()
     val results = cache.items
-    val page = cache.page
     val hasNext = cache.hasNextPage
     var loading by remember { mutableStateOf(cache.items.isEmpty()) }
     var loadingMore by remember { mutableStateOf(false) }
