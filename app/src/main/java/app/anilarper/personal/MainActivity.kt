@@ -87,7 +87,7 @@ private fun AnilarperApp() {
             }
         ) { padding ->
             when (selected) {
-                "Home" -> HomeScreen(Modifier.padding(padding)) { selected = "Discover" }
+                "Home" -> HomeScreen(Modifier.padding(padding), library) { selected = "Discover" }
                 "Discover" -> DiscoverScreen(Modifier.padding(padding), library.map { it.id }.toSet()) { anime ->
                     library = if (library.any { it.id == anime.id }) library.filterNot { it.id == anime.id }
                     else library + anime
@@ -159,7 +159,7 @@ private fun AnilarperApp() {
 }
 
 @Composable
-private fun HomeScreen(modifier: Modifier = Modifier, onDiscover: () -> Unit) {
+private fun HomeScreen(modifier: Modifier = Modifier, library: List<Anime>, onDiscover: () -> Unit) {
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)) {
         Spacer(Modifier.height(18.dp))
@@ -186,6 +186,26 @@ private fun HomeScreen(modifier: Modifier = Modifier, onDiscover: () -> Unit) {
                     Text("Explore anime", fontWeight = FontWeight.Bold)
                     Spacer(Modifier.width(6.dp))
                     Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
+                }
+            }
+        }
+        val continueWatching = library.filter { it.watchStatus == "WATCHING" && it.progress > 0 }
+            .sortedByDescending { it.lastWatchedAt }.take(5)
+        if (continueWatching.isNotEmpty()) {
+            SectionTitle("Continue watching", "Pick up where you left off")
+            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                continueWatching.forEach { anime ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        AsyncImage(model = anime.cover, contentDescription = anime.title,
+                            modifier = Modifier.size(width = 46.dp, height = 60.dp).background(Panel2, RoundedCornerShape(7.dp)))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(anime.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 2)
+                            Text("Episode ${anime.progress}${anime.episodes?.let { " / $it" } ?: ""}",
+                                color = Muted, fontSize = 10.sp)
+                        }
+                        Icon(Icons.Default.PlayCircle, contentDescription = "Continue watching", tint = Violet)
+                    }
                 }
             }
         }
@@ -545,7 +565,8 @@ private fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, o
                                 val next = anime.progress + 1
                                 val capped = anime.episodes?.let { next.coerceAtMost(it) } ?: next
                                 onUpdate(anime.copy(progress = capped,
-                                    watchStatus = if (anime.episodes != null && capped >= anime.episodes) "COMPLETED" else "WATCHING"))
+                                    watchStatus = if (anime.episodes != null && capped >= anime.episodes) "COMPLETED" else "WATCHING",
+                                    lastWatchedAt = System.currentTimeMillis()))
                             }, enabled = anime.episodes == null || anime.progress < anime.episodes) {
                                 Icon(Icons.Default.AddCircleOutline, contentDescription = "Increase episode", tint = Violet)
                             }
@@ -1058,6 +1079,7 @@ private fun StatisticsScreen(library: List<Anime>, readingLibrary: List<ReadingT
     val watching = library.count { it.watchStatus == "WATCHING" }
     val planning = library.count { it.watchStatus == "PLANNING" }
     val episodes = library.sumOf { it.progress }
+    val estimatedHours = episodes * 24 / 60
     val manga = readingLibrary.count { it.kind != "NOVEL" }
     val novels = readingLibrary.count { it.kind == "NOVEL" }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
@@ -1071,6 +1093,7 @@ private fun StatisticsScreen(library: List<Anime>, readingLibrary: List<ReadingT
             ProfileStat("Episodes", episodes.toString(), Modifier.weight(1f))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            ProfileStat("Watch time", if (estimatedHours < 1) "<1 hr" else "$estimatedHours hrs", Modifier.weight(1f))
             ProfileStat("Completed", completed.toString(), Modifier.weight(1f))
             ProfileStat("Watching", watching.toString(), Modifier.weight(1f))
             ProfileStat("Planning", planning.toString(), Modifier.weight(1f))
@@ -1298,7 +1321,7 @@ private fun loadLibrary(context: Context): List<Anime> = try {
             o.optString("format"), o.optString("status"),
             if (o.isNull("episodes")) null else o.optInt("episodes"),
             if (o.isNull("score")) null else o.optInt("score"), o.optString("description"),
-            o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0))
+            o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0), o.optLong("lastWatchedAt", 0L))
     }
 } catch (_: Exception) { emptyList() }
 
@@ -1308,7 +1331,8 @@ private fun persistLibrary(context: Context, library: List<Anime>) {
         array.put(JSONObject().put("id", a.id).put("title", a.title).put("nativeTitle", a.nativeTitle)
             .put("cover", a.cover).put("format", a.format).put("status", a.status)
             .put("episodes", a.episodes).put("score", a.score).put("description", a.description)
-            .put("watchStatus", a.watchStatus).put("progress", a.progress))
+            .put("watchStatus", a.watchStatus).put("progress", a.progress)
+            .put("lastWatchedAt", a.lastWatchedAt))
     }
     context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit()
         .putString("library", array.toString()).apply()
