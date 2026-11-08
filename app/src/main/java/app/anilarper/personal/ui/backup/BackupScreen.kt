@@ -74,35 +74,39 @@ fun BackupScreen(context: Context, modifier: Modifier = Modifier, onRestored: ()
             confirmButton = {
                 TextButton(onClick = {
                     confirmRestore = null
-                    runCatching {
-                        val raw = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                            ?: error("Couldn't read the selected file.")
-                        val backup = JSONObject(raw)
-                        require(backup.optString("format") == "anilarper-backup") { "This isn't an Anilarper backup file." }
-                        require(backup.optInt("version", 0) == 1) { "Unsupported backup version." }
-                        val values = backup.getJSONObject("preferences")
-                        require(values.length() > 0) { "This backup contains no data. Nothing was changed." }
-                        val prefs = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE)
-                        val snapshot = JSONObject().put("format", "anilarper-backup").put("version", 1)
-                            .put("preferences", JSONObject(prefs.all))
-                        java.io.File(context.filesDir, "pre-restore-backup.json").writeText(snapshot.toString())
-                        val editor = prefs.edit().clear()
-                        val keys = values.keys()
-                        while (keys.hasNext()) {
-                            val key = keys.next()
-                            when (val value = values.get(key)) {
-                                is String -> editor.putString(key, value)
-                                is Boolean -> editor.putBoolean(key, value)
-                                is Int -> editor.putInt(key, value)
-                                is Long -> editor.putLong(key, value)
-                                is Double -> editor.putFloat(key, value.toFloat())
-                                is Number -> editor.putLong(key, value.toLong())
-                                is JSONArray, is JSONObject -> editor.putString(key, value.toString())
+                    scope.launch {
+                        runCatching {
+                            val raw = withContext(Dispatchers.IO) {
+                                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                            } ?: error("Couldn't read the selected file.")
+                            val backup = JSONObject(raw)
+                            require(backup.optString("format") == "anilarper-backup") { "This isn't an Anilarper backup file." }
+                            require(backup.optInt("version", 0) == 1) { "Unsupported backup version." }
+                            val values = backup.getJSONObject("preferences")
+                            require(values.length() > 0) { "This backup contains no data. Nothing was changed." }
+                            val snapshot = withContext(Dispatchers.IO) { repository.createBackup() }
+                            withContext(Dispatchers.IO) {
+                                java.io.File(context.filesDir, "pre-restore-backup.json").writeText(snapshot.toString(2))
                             }
-                        }
-                        check(editor.commit()) { "Couldn't save the restored data." }
-                    }.onSuccess { onRestored(); message = "Backup restored." }
-                        .onFailure { message = it.message ?: "Restore failed. Your data may not have changed." }
+                            val prefs = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE)
+                            val editor = prefs.edit().clear()
+                            val keys = values.keys()
+                            while (keys.hasNext()) {
+                                val key = keys.next()
+                                when (val value = values.get(key)) {
+                                    is String -> editor.putString(key, value)
+                                    is Boolean -> editor.putBoolean(key, value)
+                                    is Int -> editor.putInt(key, value)
+                                    is Long -> editor.putLong(key, value)
+                                    is Double -> editor.putFloat(key, value.toFloat())
+                                    is Number -> editor.putLong(key, value.toLong())
+                                    is JSONArray, is JSONObject -> editor.putString(key, value.toString())
+                                }
+                            }
+                            check(withContext(Dispatchers.IO) { editor.commit() }) { "Couldn't save the restored data." }
+                        }.onSuccess { onRestored(); message = "Backup restored." }
+                            .onFailure { message = it.message ?: "Restore failed. Your data may not have changed." }
+                    }
                 }) { Text("Restore", color = Violet) }
             },
             dismissButton = { TextButton(onClick = { confirmRestore = null }) { Text("Cancel", color = Muted) } }
