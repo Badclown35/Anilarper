@@ -227,6 +227,9 @@ private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, on
     var detail by remember { mutableStateOf<Anime?>(null) }
     var detailLoading by remember { mutableStateOf(false) }
     var detailError by remember { mutableStateOf<String?>(null) }
+    var franchise by remember { mutableStateOf<FranchiseResult?>(null) }
+    var franchiseLoading by remember { mutableStateOf(false) }
+    var franchiseError by remember { mutableStateOf<String?>(null) }
     var genre by remember { mutableStateOf<String?>(null) }
     var format by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf<String?>(null) }
@@ -260,10 +263,21 @@ private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, on
         val selected = selectedAnime ?: return@LaunchedEffect
         detail = null
         detailError = null
+        franchise = null
+        franchiseError = null
         detailLoading = true
-        try { detail = AniListApi.details(selected.id) }
-        catch (_: Exception) { detailError = "Extra details couldn't be loaded. The catalog summary is still available." }
-        finally { detailLoading = false }
+        franchiseLoading = true
+        try {
+            val graph = AniListApi.franchise(selected.id)
+            franchise = graph
+            detail = graph.root
+        } catch (_: Exception) {
+            detailError = "Extra details couldn't be loaded. The catalog summary is still available."
+            franchiseError = "The full franchise map couldn't be loaded. Try again in a moment."
+        } finally {
+            detailLoading = false
+            franchiseLoading = false
+        }
     }
 
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
@@ -377,10 +391,21 @@ private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, on
                     Text(shown.description.ifBlank { "No synopsis available." }, color = Muted, fontSize = 12.sp)
                     if (detailLoading) CircularProgressIndicator(color = Violet, modifier = Modifier.size(20.dp))
                     detailError?.let { Text(it, color = Muted, fontSize = 10.sp) }
-                    if (shown.relations.isNotEmpty()) {
-                        Divider(color = Panel)
-                        Text("CONNECTED TITLES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                        shown.relations.forEach { relation ->
+                    Divider(color = Panel)
+                    Text("FRANCHISE MAP", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    Text("Connected anime across sequels, prequels, movies, OVAs, specials, and side stories.",
+                        color = Muted, fontSize = 10.sp)
+                    if (franchiseLoading) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            CircularProgressIndicator(color = Violet, modifier = Modifier.size(18.dp))
+                            Text("Checking connected entries…", color = Muted, fontSize = 11.sp)
+                        }
+                    }
+                    franchiseError?.let { Text(it, color = Muted, fontSize = 10.sp) }
+                    franchise?.let { graph ->
+                        Text("${graph.entries.size} connected entries found • ${graph.scannedCount} checked",
+                            color = Muted, fontSize = 10.sp)
+                        graph.entries.forEach { relation ->
                             Row(Modifier.fillMaxWidth().clickable { selectedAnime = relation.anime }
                                 .background(Panel, RoundedCornerShape(10.dp)).padding(9.dp),
                                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -388,12 +413,18 @@ private fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, on
                                     modifier = Modifier.size(width = 42.dp, height = 56.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(relation.anime.title, color = White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    Text(relation.relation.replace('_',' ').lowercase().replaceFirstChar { it.uppercase() },
+                                    Text("${relation.relation.replace('_',' ').lowercase().replaceFirstChar { it.uppercase() }} • ${relation.anime.format}",
                                         color = Violet, fontSize = 10.sp)
+                                    Text(listOfNotNull(relation.anime.seasonYear?.toString(), relation.anime.status.lowercase().replace('_',' ')).joinToString(" • "),
+                                        color = Muted, fontSize = 9.sp)
                                 }
                                 Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
                             }
                         }
+                        if (graph.isPartial) Text("This map may be incomplete. AniList's relationship data can be missing, and the scan has a size limit.",
+                            color = Muted, fontSize = 10.sp)
+                        else if (graph.entries.isEmpty()) Text("AniList currently lists no connected anime for this title.",
+                            color = Muted, fontSize = 10.sp)
                     }
                 }
             },
