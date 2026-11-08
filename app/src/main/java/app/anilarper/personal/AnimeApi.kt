@@ -74,7 +74,7 @@ object AniListApi {
                         media(search: ${'$'}search, type: ANIME, isAdult: false,
                             genre_in: ${'$'}genre, format: ${'$'}format, status: ${'$'}status,
                             season: ${'$'}season, seasonYear: ${'$'}year, sort: ${'$'}sort) {
-                            ${'$'}FIELDS
+                            $FIELDS
                         }
                     }
                 }
