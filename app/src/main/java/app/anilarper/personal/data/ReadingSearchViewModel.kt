@@ -22,17 +22,24 @@ class ReadingSearchViewModel : ViewModel() {
     val state: StateFlow<ReadingSearchState> = _state.asStateFlow()
     private var searchJob: Job? = null
 
-    fun search(query: String, novels: Boolean) {
+    fun search(query: String, novels: Boolean, cacheRepository: CatalogCacheRepository) {
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
             _state.value = _state.value.copy(loading = true, error = null)
             try {
                 val results = AniListReadingApi.search(query, novels)
+                cacheRepository.saveReading(CatalogCacheRepository.readingKey(query, novels), results)
                 _state.value = ReadingSearchState(results = results)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                _state.value = _state.value.copy(
+                val cached = runCatching {
+                    cacheRepository.getReading(CatalogCacheRepository.readingKey(query, novels))
+                }.getOrNull()
+                _state.value = if (cached != null) ReadingSearchState(
+                    results = cached,
+                    error = "Offline — showing saved reading results."
+                ) else _state.value.copy(
                     loading = false,
                     error = "Catalog unavailable. Check your connection and retry."
                 )
