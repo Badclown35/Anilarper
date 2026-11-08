@@ -47,6 +47,8 @@ import app.anilarper.personal.ui.discover.DiscoverScreen
 import app.anilarper.personal.ui.music.MusicScreen
 import app.anilarper.personal.ui.quests.QuestScreen
 import app.anilarper.personal.ui.backup.BackupScreen
+import app.anilarper.personal.ui.stats.WatchHistoryScreen
+import app.anilarper.personal.ui.stats.StatisticsScreen
 import androidx.lifecycle.ViewModelProvider
 import app.anilarper.personal.data.AnimeLibraryViewModel
 import app.anilarper.personal.data.ReadingLibraryViewModel
@@ -246,126 +248,6 @@ private fun saveProfile(context: Context, profile: ProfileSettings) {
         .putString("profileFavorites", profile.favoriteTitles)
         .putInt("profileAccent", profile.accentStyle)
         .apply()
-}
-
-@Composable
-private fun WatchHistoryScreen(library: List<Anime>, modifier: Modifier = Modifier) {
-    val history = library.filter { it.lastWatchedAt > 0L && it.progress > 0 }
-        .sortedByDescending { it.lastWatchedAt }
-    Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-        Spacer(Modifier.height(18.dp))
-        Text("YOUR ACTIVITY", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Text("Watch history", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-        Text("Anime you've most recently updated.", color = Muted, fontSize = 12.sp)
-        Spacer(Modifier.height(14.dp))
-        if (history.isEmpty()) {
-            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Default.History, contentDescription = null, tint = Violet, modifier = Modifier.size(32.dp))
-                Text("Your history will appear here.", color = White, fontWeight = FontWeight.SemiBold)
-                Text("Update an anime's watched episode count in your Library to start building your history.",
-                    color = Muted, fontSize = 12.sp)
-            }
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
-                items(history, key = { it.id }) { anime ->
-                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
-                        AsyncImage(model = anime.cover, contentDescription = anime.title,
-                            modifier = Modifier.width(52.dp).height(70.dp).background(Panel2, RoundedCornerShape(8.dp)))
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(anime.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
-                            Text("Episode ${anime.progress}${anime.episodes?.let { " / $it" } ?: ""}",
-                                color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Text(android.text.format.DateUtils.getRelativeTimeSpanString(anime.lastWatchedAt).toString(),
-                                color = Muted, fontSize = 10.sp)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StatisticsScreen(library: List<Anime>, readingLibrary: List<ReadingTitle>, modifier: Modifier = Modifier) {
-    val completed = library.count { it.watchStatus == "COMPLETED" }
-    val watching = library.count { it.watchStatus == "WATCHING" }
-    val planning = library.count { it.watchStatus == "PLANNING" }
-    val paused = library.count { it.watchStatus == "PAUSED" }
-    val dropped = library.count { it.watchStatus == "DROPPED" }
-    val episodes = library.sumOf { it.progress }
-    val estimatedHours = episodes * 24 / 60
-    val manga = readingLibrary.count { it.kind != "NOVEL" }
-    val novels = readingLibrary.count { it.kind == "NOVEL" }
-    val genreCounts = library.flatMap { it.genres }.groupingBy { it }.eachCount()
-        .entries.sortedByDescending { it.value }.take(5)
-    val total = library.size.coerceAtLeast(1)
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Spacer(Modifier.height(7.dp))
-        Text("YOUR ACTIVITY", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Text("Your statistics", color = White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-        Text("A clearer picture of the stories you've followed.", color = Muted, fontSize = 12.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            DashboardStat("ANIME SAVED", library.size.toString(), Icons.Default.Bookmarks, Modifier.weight(1f))
-            DashboardStat("EPISODES", episodes.toString(), Icons.Default.PlayCircle, Modifier.weight(1f))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            DashboardStat("COMPLETED", completed.toString(), Icons.Default.CheckCircle, Modifier.weight(1f))
-            DashboardStat("EST. HOURS", if (estimatedHours < 1) "<1" else estimatedHours.toString(), Icons.Default.Schedule, Modifier.weight(1f))
-        }
-        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(11.dp)) {
-            Text("WATCH STATUS", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-            val statuses = listOf(
-                Triple("Watching", watching, Violet),
-                Triple("Completed", completed, Color(0xFF77CFA5)),
-                Triple("Planning", planning, Color(0xFF8EA8E8)),
-                Triple("Paused", paused, Color(0xFFE0B66D)),
-                Triple("Dropped", dropped, Color(0xFFB17C91))
-            )
-            statuses.forEach { (label, count, color) ->
-                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(label, color = White, fontSize = 12.sp)
-                        Spacer(Modifier.weight(1f))
-                        Text("$count", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                    LinearProgressIndicator(
-                        progress = { (count.toFloat() / total).coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth().height(5.dp),
-                        color = color, trackColor = Panel2
-                    )
-                }
-            }
-        }
-        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("YOUR READING SHELF", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                DashboardStat("MANGA", manga.toString(), Icons.Default.MenuBook, Modifier.weight(1f))
-                DashboardStat("LIGHT NOVELS", novels.toString(), Icons.Default.AutoStories, Modifier.weight(1f))
-            }
-            Text("${readingLibrary.sumOf { it.progress }} chapters tracked • ${readingLibrary.sumOf { it.volumeProgress }} volumes tracked",
-                color = Muted, fontSize = 11.sp)
-        }
-        if (genreCounts.isNotEmpty()) {
-            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("MOST-COLLECTED GENRES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-                genreCounts.forEach { (genre, count) ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(genre, color = White, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        Text("$count ${if (count == 1) "title" else "titles"}", color = Muted, fontSize = 10.sp)
-                    }
-                }
-            }
-        }
-        Text("Watch time is an estimate based on 24 minutes per episode. Statistics use only data saved on this device.",
-            color = Muted, fontSize = 10.sp)
-        Spacer(Modifier.height(10.dp))
-    }
 }
 
 @Composable
