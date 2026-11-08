@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
 private fun AnilarperApp() {
     val context = LocalContext.current
     var selected by remember { mutableStateOf("Home") }
+    var moreOpen by remember { mutableStateOf(false) }
     var library by remember { mutableStateOf(loadLibrary(context)) }
     var readingLibrary by remember { mutableStateOf(loadReadingLibrary(context)) }
     MaterialTheme(colorScheme = darkColorScheme(
@@ -66,18 +67,17 @@ private fun AnilarperApp() {
         Scaffold(
             containerColor = Ink,
             bottomBar = {
-                NavigationBar(containerColor = Panel) {
+                NavigationBar(containerColor = Panel, tonalElevation = 8.dp) {
                     listOf("Home" to Icons.Default.Home, "Discover" to Icons.Default.Explore,
-                        "Library" to Icons.Default.Bookmarks, "Read" to Icons.Default.MenuBook,
-                        "Music" to Icons.Default.LibraryMusic, "Quests" to Icons.Default.EmojiEvents,
-                        "Profile" to Icons.Default.Person).forEach { (label, icon) ->
+                        "Library" to Icons.Default.Bookmarks, "More" to Icons.Default.MoreHoriz).forEach { (label, icon) ->
                         NavigationBarItem(
-                            selected = selected == label, onClick = { selected = label },
+                            selected = if (label == "More") selected in setOf("Read", "Music", "Quests", "Profile") else selected == label,
+                            onClick = { if (label == "More") moreOpen = true else selected = label },
                             icon = { Icon(icon, contentDescription = label) },
-                            label = { Text(label, fontSize = 10.sp) },
+                            label = { Text(label, fontSize = 11.sp, maxLines = 1) },
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = Violet, selectedTextColor = Violet,
-                                indicatorColor = Violet.copy(alpha = .14f),
+                                indicatorColor = Violet.copy(alpha = .16f),
                                 unselectedIconColor = Muted, unselectedTextColor = Muted
                             )
                         )
@@ -121,6 +121,33 @@ private fun AnilarperApp() {
                 "Music" -> MusicScreen(Modifier.padding(padding))
                 "Quests" -> QuestScreen(context, library, readingLibrary, Modifier.padding(padding))
                 else -> ProfileScreen(context, library, readingLibrary, Modifier.padding(padding))
+            }
+        }
+        if (moreOpen) {
+            ModalBottomSheet(onDismissRequest = { moreOpen = false }, containerColor = Panel) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 26.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("MORE FROM ANILARPER", color = Violet, fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                    listOf(
+                        Triple("Read", "Manga & light novels", Icons.Default.MenuBook),
+                        Triple("Music", "Your soundtrack sources", Icons.Default.LibraryMusic),
+                        Triple("Quests", "Milestones & XP", Icons.Default.EmojiEvents),
+                        Triple("Profile", "Your personal space", Icons.Default.Person)
+                    ).forEach { (label, subtitle, icon) ->
+                        Row(Modifier.fillMaxWidth().clickable { selected = label; moreOpen = false }
+                            .background(Panel2, RoundedCornerShape(14.dp)).padding(15.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+                            Icon(icon, contentDescription = null, tint = Violet)
+                            Column(Modifier.weight(1f)) {
+                                Text(label, color = White, fontWeight = FontWeight.SemiBold)
+                                Text(subtitle, color = Muted, fontSize = 11.sp)
+                            }
+                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
+                        }
+                    }
+                }
             }
         }
     }
@@ -511,58 +538,73 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
     var playing by remember { mutableStateOf(false) }
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
+    var showLinkDialog by remember { mutableStateOf(false) }
+    var linkTitle by remember { mutableStateOf("") }
+    var linkUrl by remember { mutableStateOf("") }
+    var links by remember { mutableStateOf(loadMusicLinks(context)) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             val track = LocalTrack(uri.toString(), uri.lastPathSegment?.substringAfterLast('/')?.substringBefore('?') ?: "Audio track")
-            if (tracks.none { it.uri == track.uri }) {
-                tracks = tracks + track
-                persistTracks(context, tracks)
-            }
+            if (tracks.none { it.uri == track.uri }) { tracks = tracks + track; persistTracks(context, tracks) }
             message = "Added to your local soundtrack library."
         }
     }
     DisposableEffect(player) { onDispose { player?.release() } }
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(18.dp))
         Text("ANILARPER AUDIO", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Text("Your soundtrack shelf.", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-        Text("Play audio files you have access to on this device.", color = Muted, fontSize = 12.sp)
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = { picker.launch(arrayOf("audio/*")) },
-            colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = Ink),
-            shape = RoundedCornerShape(13.dp)) {
-            Icon(Icons.Default.Add, contentDescription = null)
-            Spacer(Modifier.width(6.dp))
-            Text("Add audio files", fontWeight = FontWeight.Bold)
+        Text("Your soundtrack hub.", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text("Keep your favorite listening sources together.", color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { showLinkDialog = true },
+                colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = Ink),
+                shape = RoundedCornerShape(13.dp), modifier = Modifier.weight(1f)) {
+                Icon(Icons.Default.Link, contentDescription = null)
+                Spacer(Modifier.width(5.dp)); Text("Add music link", fontWeight = FontWeight.Bold)
+            }
+            OutlinedButton(onClick = { picker.launch(arrayOf("audio/*")) },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Violet),
+                shape = RoundedCornerShape(13.dp), modifier = Modifier.weight(1f)) {
+                Icon(Icons.Default.AudioFile, contentDescription = null)
+                Spacer(Modifier.width(5.dp)); Text("Add local file")
+            }
         }
         message?.let { Text(it, color = Violet, fontSize = 11.sp) }
-        if (tracks.isEmpty()) {
-            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Default.MusicNote, contentDescription = null, tint = Violet, modifier = Modifier.size(34.dp))
-                Text("Your soundtrack library is empty.", color = White, fontWeight = FontWeight.SemiBold)
-                Text("Add audio files stored on your phone. Anilarper saves file references, not copies of audio.",
-                    color = Muted, fontSize = 12.sp)
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp),
+            contentPadding = PaddingValues(bottom = 20.dp), modifier = Modifier.weight(1f)) {
+            if (links.isNotEmpty()) {
+                item { Text("STREAMING LINKS", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
+                items(links, key = { it.url }) { link ->
+                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).clickable {
+                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url))) }
+                            .onFailure { message = "Couldn't open this music link." }
+                    }.padding(13.dp), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = null, tint = Violet, modifier = Modifier.size(26.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(link.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
+                            Text(link.source, color = Muted, fontSize = 10.sp)
+                        }
+                        IconButton(onClick = {
+                            links = links.filterNot { it.url == link.url }; persistMusicLinks(context, links)
+                        }) { Icon(Icons.Default.DeleteOutline, contentDescription = "Remove link", tint = Muted) }
+                    }
+                }
             }
-        } else {
-            Text("YOUR TRACKS", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 14.dp),
-                modifier = Modifier.weight(1f)) {
+            if (tracks.isNotEmpty()) {
+                item { Text("LOCAL AUDIO FILES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
                 items(tracks, key = { it.uri }) { track ->
                     Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(13.dp)).clickable {
                         if (current == track.uri && player != null) {
-                            if (playing) { player?.pause(); playing = false }
-                            else { player?.start(); playing = true }
+                            if (playing) { player?.pause(); playing = false } else { player?.start(); playing = true }
                         } else {
                             runCatching {
+                                player?.release()
                                 val next = MediaPlayer.create(context, Uri.parse(track.uri)) ?: error("Audio file couldn't be opened.")
                                 next.setOnCompletionListener { playing = false }
-                                player = next
-                                current = track.uri
-                                next.start()
-                                playing = true
-                                message = null
+                                player = next; current = track.uri; next.start(); playing = true; message = null
                             }.onFailure { message = it.message ?: "Unable to play this file." }
                         }
                     }.padding(13.dp), verticalAlignment = Alignment.CenterVertically,
@@ -572,10 +614,18 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
                         Text(track.title, color = White, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 2)
                         IconButton(onClick = {
                             if (current == track.uri) { player?.release(); player = null; current = null; playing = false }
-                            tracks = tracks.filterNot { it.uri == track.uri }
-                            persistTracks(context, tracks)
+                            tracks = tracks.filterNot { it.uri == track.uri }; persistTracks(context, tracks)
                         }) { Icon(Icons.Default.DeleteOutline, contentDescription = "Remove track", tint = Muted) }
                     }
+                }
+            }
+            if (links.isEmpty() && tracks.isEmpty()) item {
+                Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.MusicNote, contentDescription = null, tint = Violet, modifier = Modifier.size(34.dp))
+                    Text("Your music shelf is empty.", color = White, fontWeight = FontWeight.SemiBold)
+                    Text("Add a YouTube, SoundCloud, Spotify, Apple Music, or other listening link—or add an audio file stored on your phone.",
+                        color = Muted, fontSize = 12.sp)
                 }
             }
         }
@@ -583,238 +633,69 @@ private fun MusicScreen(modifier: Modifier = Modifier) {
             Row(Modifier.fillMaxWidth().background(Panel2, RoundedCornerShape(14.dp)).padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("NOW PLAYING", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    Text("NOW PLAYING · LOCAL", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                     Text(tracks.firstOrNull { it.uri == current }?.title ?: "Audio track", color = White, fontSize = 12.sp, maxLines = 1)
                 }
-                IconButton(onClick = {
-                    if (playing) { player?.pause(); playing = false }
-                    else { player?.start(); playing = true }
-                }) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause", tint = Violet) }
+                IconButton(onClick = { if (playing) { player?.pause(); playing = false } else { player?.start(); playing = true } }) {
+                    Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause", tint = Violet)
+                }
                 IconButton(onClick = { player?.seekTo(0); if (!playing) { player?.start(); playing = true } }) {
                     Icon(Icons.Default.Replay, contentDescription = "Restart track", tint = Violet)
                 }
             }
         }
     }
-}
-
-
-private data class ProfileSettings(
-    val displayName: String = "Anime Explorer",
-    val bio: String = "Finding my next favorite story.",
-    val avatarUrl: String = "",
-    val bannerStyle: Int = 0,
-    val favoriteTitles: String = ""
-)
-
-private fun loadProfile(context: Context): ProfileSettings {
-    val p = context.getSharedPreferences("anilarper", Context.MODE_PRIVATE)
-    return ProfileSettings(
-        p.getString("profileName", "Anime Explorer") ?: "Anime Explorer",
-        p.getString("profileBio", "Finding my next favorite story.") ?: "",
-        p.getString("profileAvatar", "") ?: "",
-        p.getInt("profileBanner", 0),
-        p.getString("profileFavorites", "") ?: ""
-    )
-}
-
-private fun saveProfile(context: Context, profile: ProfileSettings) {
-    context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit()
-        .putString("profileName", profile.displayName)
-        .putString("profileBio", profile.bio)
-        .putString("profileAvatar", profile.avatarUrl)
-        .putInt("profileBanner", profile.bannerStyle)
-        .putString("profileFavorites", profile.favoriteTitles)
-        .apply()
-}
-
-private data class QuestData(val id: String, val title: String, val detail: String,
-    val progress: Int, val target: Int, val reward: Int)
-
-@Composable
-private fun QuestScreen(context: Context, library: List<Anime>,
-    readingLibrary: List<ReadingTitle>, modifier: Modifier = Modifier) {
-    val prefs = remember { context.getSharedPreferences("anilarper", Context.MODE_PRIVATE) }
-    var xp by remember { mutableIntStateOf(prefs.getInt("questXp", 0)) }
-    var claimed by remember {
-        mutableStateOf(runCatching {
-            val a = JSONArray(prefs.getString("claimedQuests", "[]") ?: "[]")
-            (0 until a.length()).map { a.getString(it) }.toSet()
-        }.getOrDefault(emptySet()))
-    }
-    val quests = listOf(
-        QuestData("first_save", "First addition", "Save an anime to your library.", if (library.isNotEmpty()) 1 else 0, 1, 25),
-        QuestData("episode_one", "Track your progress", "Log an episode watched.", library.sumOf { it.progress }.coerceAtMost(1), 1, 30),
-        QuestData("reading_one", "A new chapter", "Add a manga or light novel to your shelf.", if (readingLibrary.isNotEmpty()) 1 else 0, 1, 25),
-        QuestData("collection_three", "Building a collection", "Save three anime titles.", library.size.coerceAtMost(3), 3, 50),
-        QuestData("finish_one", "One story completed", "Mark an anime as completed.", if (library.any { it.watchStatus == "COMPLETED" }) 1 else 0, 1, 60)
-    )
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(13.dp)) {
-        Spacer(Modifier.height(18.dp))
-        Text("YOUR JOURNEY", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Text("Quests & milestones", color = White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-        Text("Optional goals. No streaks, deadlines, or penalties for taking a break.", color = Muted, fontSize = 12.sp)
-        Row(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF342B58), Panel2)),
-            RoundedCornerShape(18.dp)).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("TOTAL EXPERIENCE", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                Text(xp.toString() + " XP", color = White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                Text("Earn XP by completing milestones when you choose.", color = Muted, fontSize = 11.sp)
-            }
-            Icon(Icons.Default.EmojiEvents, contentDescription = null, tint = Violet, modifier = Modifier.size(42.dp))
-        }
-        quests.forEach { quest ->
-            val done = quest.progress >= quest.target
-            val isClaimed = claimed.contains(quest.id)
-            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(quest.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                        Text(quest.detail, color = Muted, fontSize = 11.sp)
-                    }
-                    Text("+" + quest.reward + " XP", color = Violet, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                }
-                LinearProgressIndicator(
-                    progress = { (quest.progress.toFloat() / quest.target).coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth().height(6.dp), color = Violet, trackColor = Panel2)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(quest.progress.toString() + "/" + quest.target, color = Muted, fontSize = 10.sp)
-                    Spacer(Modifier.weight(1f))
-                    when {
-                        isClaimed -> Text("REWARD CLAIMED", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        done -> Button(onClick = {
-                            xp += quest.reward
-                            claimed = claimed + quest.id
-                            prefs.edit().putInt("questXp", xp)
-                                .putString("claimedQuests", JSONArray(claimed.toList()).toString()).apply()
-                        }, colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = Ink),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)) {
-                            Text("Claim reward", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                        else -> Text("IN PROGRESS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-    }
-}
-
-@Composable
-private fun ProfileScreen(context: Context, library: List<Anime>,
-    readingLibrary: List<ReadingTitle>, modifier: Modifier = Modifier) {
-    var profile by remember { mutableStateOf(loadProfile(context)) }
-    var editing by remember { mutableStateOf(false) }
-    val bannerColors = listOf(
-        listOf(Color(0xFF30294F), Color(0xFF171923), Color(0xFF252039)),
-        listOf(Color(0xFF193D45), Color(0xFF171923), Color(0xFF24334A)),
-        listOf(Color(0xFF4A283D), Color(0xFF171923), Color(0xFF34253F)),
-        listOf(Color(0xFF343A45), Color(0xFF171923), Color(0xFF242B39))
-    )
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Spacer(Modifier.height(18.dp))
-        Text("YOUR SPACE", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Box(Modifier.fillMaxWidth().background(Brush.linearGradient(bannerColors[profile.bannerStyle.coerceIn(0, 3)]),
-            RoundedCornerShape(22.dp)).padding(18.dp)) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (profile.avatarUrl.isNotBlank()) {
-                        AsyncImage(model = profile.avatarUrl, contentDescription = "Profile avatar",
-                            modifier = Modifier.size(68.dp).background(Panel2, CircleShape))
-                    } else {
-                        Box(Modifier.size(68.dp).background(Panel2, CircleShape), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Person, contentDescription = null, tint = Violet, modifier = Modifier.size(34.dp))
-                        }
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(profile.displayName, color = White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-                        Text("ANILARPER MEMBER", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-                    }
-                }
-                Text(profile.bio.ifBlank { "No bio yet. Make this space yours." }, color = White.copy(alpha = .85f), fontSize = 12.sp)
-                OutlinedButton(onClick = { editing = true },
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = White),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Violet.copy(alpha = .6f))) {
-                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(15.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Customize profile")
-                }
-            }
-        }
-        Text("YOUR COLLECTION", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            ProfileStat("Anime", library.size.toString(), Modifier.weight(1f))
-            ProfileStat("Completed", library.count { it.watchStatus == "COMPLETED" }.toString(), Modifier.weight(1f))
-            ProfileStat("Reading", readingLibrary.size.toString(), Modifier.weight(1f))
-        }
-        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(15.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("FAVORITES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            Text(profile.favoriteTitles.ifBlank { "Pin your favorite anime, manga, or light novels in Customize profile." },
-                color = if (profile.favoriteTitles.isBlank()) Muted else White, fontSize = 13.sp)
-        }
-        Text("Profile settings are saved on this device.", color = Muted, fontSize = 11.sp)
-        Spacer(Modifier.height(12.dp))
-    }
-    if (editing) {
-        var name by remember(profile) { mutableStateOf(profile.displayName) }
-        var bio by remember(profile) { mutableStateOf(profile.bio) }
-        var avatar by remember(profile) { mutableStateOf(profile.avatarUrl) }
-        var favorites by remember(profile) { mutableStateOf(profile.favoriteTitles) }
-        var banner by remember(profile) { mutableIntStateOf(profile.bannerStyle) }
-        AlertDialog(
-            onDismissRequest = { editing = false }, containerColor = Panel2,
-            title = { Text("Customize your profile", color = White, fontWeight = FontWeight.Bold) },
+    if (showLinkDialog) {
+        AlertDialog(onDismissRequest = { showLinkDialog = false }, containerColor = Panel2,
+            title = { Text("Add a listening link", color = White) },
             text = {
-                Column(Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Text("Display name", color = Muted, fontSize = 11.sp)
-                    OutlinedTextField(name, { name = it.take(32) }, singleLine = true,
-                        placeholder = { Text("Your display name") })
-                    Text("Bio", color = Muted, fontSize = 11.sp)
-                    OutlinedTextField(bio, { bio = it.take(140) }, minLines = 2,
-                        placeholder = { Text("A little about your anime taste") })
-                    Text("Avatar image URL (optional)", color = Muted, fontSize = 11.sp)
-                    OutlinedTextField(avatar, { avatar = it.take(500) }, singleLine = true,
-                        placeholder = { Text("https://…") })
-                    Text("Favorite titles", color = Muted, fontSize = 11.sp)
-                    OutlinedTextField(favorites, { favorites = it.take(180) }, minLines = 2,
-                        placeholder = { Text("Separate titles with commas") })
-                    Text("Profile banner", color = Muted, fontSize = 11.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        bannerColors.forEachIndexed { index, colors ->
-                            Box(Modifier.weight(1f).height(38.dp)
-                                .background(Brush.linearGradient(colors), RoundedCornerShape(9.dp))
-                                .clickable { banner = index }) {
-                                if (banner == index) Icon(Icons.Default.Check, null, tint = White,
-                                    modifier = Modifier.align(Alignment.Center))
-                            }
-                        }
-                    }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(linkTitle, { linkTitle = it.take(70) }, singleLine = true,
+                        label = { Text("Name") }, placeholder = { Text("Anime OST playlist") })
+                    OutlinedTextField(linkUrl, { linkUrl = it.take(1000) }, singleLine = true,
+                        label = { Text("Music URL") }, placeholder = { Text("https://…") })
+                    Text("Opens through the service's official app or website. Anilarper doesn't download or re-host streams.",
+                        color = Muted, fontSize = 10.sp)
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    profile = ProfileSettings(name.ifBlank { "Anime Explorer" }, bio, avatar, banner, favorites)
-                    saveProfile(context, profile)
-                    editing = false
-                }) { Text("Save profile", color = Violet) }
+                    val parsed = runCatching { Uri.parse(linkUrl.trim()) }.getOrNull()
+                    if (parsed != null && parsed.scheme == "https" && !parsed.host.isNullOrBlank()) {
+                        val host = parsed.host!!.lowercase()
+                        val source = when {
+                            host.contains("youtube.com") || host == "youtu.be" -> "YouTube"
+                            host.contains("soundcloud.com") -> "SoundCloud"
+                            host.contains("spotify.com") -> "Spotify"
+                            host.contains("music.apple.com") -> "Apple Music"
+                            host.contains("music.youtube.com") -> "YouTube Music"
+                            else -> host.removePrefix("www.")
+                        }
+                        val item = MusicLink(linkTitle.ifBlank { source + " link" }, parsed.toString(), source)
+                        if (links.none { it.url == item.url }) { links = links + item; persistMusicLinks(context, links) }
+                        linkTitle = ""; linkUrl = ""; showLinkDialog = false; message = "Listening link saved."
+                    } else message = "Enter a valid HTTPS music link."
+                }) { Text("Save link", color = Violet) }
             },
-            dismissButton = { TextButton(onClick = { editing = false }) { Text("Cancel", color = Muted) } }
+            dismissButton = { TextButton(onClick = { showLinkDialog = false }) { Text("Cancel", color = Muted) } }
         )
     }
 }
 
-@Composable
-private fun ProfileStat(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(modifier.background(Panel, RoundedCornerShape(14.dp)).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(value, color = White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text(label, color = Muted, fontSize = 10.sp)
+private data class MusicLink(val title: String, val url: String, val source: String)
+
+private fun loadMusicLinks(context: Context): List<MusicLink> = try {
+    val a = JSONArray(context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).getString("musicLinks", "[]") ?: "[]")
+    (0 until a.length()).map { i ->
+        val o = a.getJSONObject(i)
+        MusicLink(o.getString("title"), o.getString("url"), o.getString("source"))
     }
+} catch (_: Exception) { emptyList() }
+
+private fun persistMusicLinks(context: Context, links: List<MusicLink>) {
+    val a = JSONArray()
+    links.forEach { a.put(JSONObject().put("title", it.title).put("url", it.url).put("source", it.source)) }
+    context.getSharedPreferences("anilarper", Context.MODE_PRIVATE).edit().putString("musicLinks", a.toString()).apply()
 }
 
 private data class LocalTrack(val uri: String, val title: String)
