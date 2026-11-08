@@ -194,7 +194,7 @@ fun HomeScreen(
 }
 
 @Composable
-private fun DashboardStat(label: String, value: String,
+internal fun DashboardStat(label: String, value: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier = Modifier) {
     Column(modifier.background(Panel, RoundedCornerShape(15.dp)).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
