@@ -175,6 +175,9 @@ private struct ReadingShelfRow: View {
             }
         }
         .padding(.vertical, 4)
+        .onChange(of: reading.titles) { _, items in
+            if let latest = items.first(where: { $0.id == title.id && $0.kind == title.kind }) { title = latest }
+        }
     }
 }
 
