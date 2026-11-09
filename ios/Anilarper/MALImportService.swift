@@ -15,6 +15,7 @@ enum MALImportService {
         var skipped = 0
 
         for (index, entry) in entries.enumerated() {
+            if index > 0 { try? await Task.sleep(nanoseconds: 650_000_000) }
             await progress(index + 1, entries.count, entry.title)
             do {
                 var match = try await client.findAnime(malId: entry.malId)
@@ -23,7 +24,7 @@ enum MALImportService {
                     let normalized = normalize(entry.title)
                     match = candidates.first(where: { candidate in
                         [candidate.title.english, candidate.title.romaji, candidate.title.native]
-                            .compactMap { $0 }
+                            .compactMap { $0 } + (candidate.synonyms ?? [])
                             .contains(where: { normalize($0) == normalized })
                     })
                 }
