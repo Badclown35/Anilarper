@@ -26,6 +26,7 @@ import app.anilarper.personal.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 
 private data class MalRow(val title: String, val score: Int, val status: String, val progress: Int, val total: Int?)
 private data class MalImportResult(val imported: Int, val skipped: Int, val errors: Int)
@@ -38,6 +39,7 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
     var rows by remember { mutableStateOf<List<MalRow>>(emptyList()) }
     var running by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0) }
+    var diagnostics by remember { mutableStateOf<List<String>>(emptyList())
     var message by remember { mutableStateOf("Choose your MyAnimeList anime-list export (.xml).") }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
@@ -66,17 +68,24 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
             running = true; progress = 0
             scope.launch {
                 var imported = 0; var skipped = 0; var errors = 0
-                rows.forEach { row ->
+                val issues = mutableListOf<String>()
+                rows.forEachIndexed { index, row ->
                     try {
-                        val candidates = AniListApi.search(row.title, 1, AnimeFilters()).items
-                        val target = candidates.firstOrNull { normalizeTitle(it.title) == normalizeTitle(row.title) }
-                        if (target == null) skipped++ else {
+                        val candidates = retryAniListSearch(row.title)
+                        val wanted = normalizeTitle(row.title)
+                        val target = candidates.firstOrNull {
+                            wanted == normalizeTitle(it.title) || wanted == normalizeTitle(it.nativeTitle)
+                        }
+                        if (target == null) {
+                            skipped++
+                            if (issues.size < 12) issues += "Skipped: ${row.title} (no exact AniList title match)"
+                        } else {
                             val status = when (row.status.trim().lowercase()) {
                                 "2", "completed" -> "COMPLETED"
                                 "1", "watching" -> "WATCHING"
                                 "3", "on-hold", "on hold" -> "PAUSED"
                                 "4", "dropped" -> "DROPPED"
-                                else -> "PLANNING" // MAL status 6 = Plan to Watch
+                                else -> "PLANNING"
                             }
                             onImport(target.copy(watchStatus = status,
                                 progress = if (status == "COMPLETED" && target.episodes != null) target.episodes else row.progress,
@@ -84,14 +93,23 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
                                 lastWatchedAt = System.currentTimeMillis()))
                             imported++
                         }
-                    } catch (_: Exception) { errors++ }
-                    progress++
+                    } catch (e: Exception) {
+                        errors++
+                        if (issues.size < 12) issues += "Error: ${row.title} — ${e.message ?: e.javaClass.simpleName}"
+                    }
+                    progress = index + 1
+                    if (index < rows.lastIndex) delay(850)
                 }
+                diagnostics = issues
                 running = false
-                message = "Imported $imported • skipped $skipped • errors $errors. Review duplicates in your library."
+                message = "Imported $imported • skipped $skipped • errors $errors. ${if (errors > 0) "See error details below." else "Review duplicates in your library."}"
             }
         }, enabled = !running, colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = Ink)) {
             Text(if (running) "Importing…" else "Import ${rows.size} entries")
+        }
+        if (diagnostics.isNotEmpty()) {
+            Text("Import details (first 12)", color = Violet, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            diagnostics.forEach { Text(it, color = Muted, fontSize = 10.sp) }
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
             items(rows.take(100), key = { it.title }) { row ->
@@ -106,6 +124,19 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
 }
 
 private fun normalizeTitle(value: String) = value.lowercase().replace(Regex("[^a-z0-9]"), "")
+
+private suspend fun retryAniListSearch(title: String): List<Anime> {
+    var last: Exception? = null
+    repeat(3) { attempt ->
+        try {
+            return AniListApi.search(title, 1, AnimeFilters()).items
+        } catch (e: Exception) {
+            last = e
+            if (attempt < 2) delay(1500L * (attempt + 1))
+        }
+    }
+    throw last ?: IllegalStateException("AniList search failed")
+}
 
 private fun parseMalExport(raw: String): List<MalRow> {
     if (raw.trimStart().startsWith("<")) return parseMalXml(raw)
