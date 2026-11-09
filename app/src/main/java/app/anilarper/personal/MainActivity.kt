@@ -85,7 +85,8 @@ private fun AnilarperApp() {
             bottomBar = {
                 NavigationBar(containerColor = Color(0xFF11131B), tonalElevation = 0.dp) {
                     listOf("Home" to Icons.Default.Home, "Discover" to Icons.Default.Explore,
-                        "Library" to Icons.Default.Bookmarks, "More" to Icons.Default.MoreHoriz).forEach { (label, icon) ->
+                        "Library" to Icons.Default.Bookmarks, "Read" to Icons.Default.MenuBook,
+                        "More" to Icons.Default.MoreHoriz).forEach { (label, icon) ->
                         val isSelected = if (label == "More")
                             currentRoute in setOf("More", "Read", "Music", "Quests", "Profile", "Stats", "Backup", "History", "CustomLists", "Recommendations", "MALImport")
                         else currentRoute == label
