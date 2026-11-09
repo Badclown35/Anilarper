@@ -34,6 +34,39 @@ struct AniListClient {
         return decoded.data.page.media.first
     }
 
+    func searchReading(_ search: String, kind: ReadingKind) async throws -> [ReadingSearchResult] {
+        let query = """
+        query ($search: String, $formats: [MediaFormat]) {
+          Page(perPage: 20) {
+            media(search: $search, type: MANGA, format_in: $formats, isAdult: false,
+                  sort: [SEARCH_MATCH]) {
+              id
+              title { romaji english native }
+              coverImage { medium }
+              format
+              status
+              chapters
+              volumes
+              description(asHtml: false)
+            }
+          }
+        }
+        """
+        let formats = kind == .novel ? ["NOVEL"] : ["MANGA", "ONE_SHOT"]
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "query": query,
+            "variables": ["search": search, "formats": formats]
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw AniListError.invalidResponse
+        }
+        return try JSONDecoder().decode(AniListReadingResponse.self, from: data).data.page.media
+    }
+
     func searchAnime(_ search: String) async throws -> [AnimeSearchResult] {
         let query = """
         query ($search: String) {
@@ -102,4 +135,26 @@ private struct AniListResponse: Decodable {
 
 enum AniListError: Error {
     case invalidResponse
+}
+
+
+struct ReadingSearchResult: Decodable, Identifiable {
+    let id: Int
+    let title: AnimeSearchResult.Titles
+    let coverImage: AnimeSearchResult.CoverImage?
+    let format: String?
+    let status: String?
+    let chapters: Int?
+    let volumes: Int?
+    let description: String?
+}
+
+private struct AniListReadingResponse: Decodable {
+    struct DataPage: Decodable {
+        struct Page: Decodable {
+            let media: [ReadingSearchResult]
+        }
+        let page: Page
+    }
+    let data: DataPage
 }
