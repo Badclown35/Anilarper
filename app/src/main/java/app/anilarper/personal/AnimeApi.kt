@@ -25,7 +25,9 @@ data class Anime(
     val seasonYear: Int? = null,
     val genres: List<String> = emptyList(),
     val studios: List<String> = emptyList(),
-    val relations: List<AnimeRelation> = emptyList()
+    val relations: List<AnimeRelation> = emptyList(),
+    val romajiTitle: String = "",
+    val synonyms: List<String> = emptyList()
 )
 
 data class AnimePage(val items: List<Anime>, val page: Int, val hasNextPage: Boolean)
@@ -45,6 +47,7 @@ object AniListApi {
     private const val FIELDS = """
         id
         title { romaji english native }
+        synonyms
         coverImage { large }
         format status episodes averageScore
         description(asHtml: false)
@@ -221,6 +224,8 @@ object AniListApi {
         }
         return Anime(
             id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
+            romajiTitle = titles.optString("romaji"),
+            synonyms = item.optJSONArray("synonyms").toStringList(),
             cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
             format = item.optString("format", "UNKNOWN").replace('_', ' '),
             status = item.optString("status", "UNKNOWN").replace('_', ' '),
