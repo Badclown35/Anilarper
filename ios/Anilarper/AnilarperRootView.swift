@@ -13,6 +13,8 @@ struct AnilarperRootView: View {
                 .tabItem { Label("Reading", systemImage: "book.closed") }
             CustomListsView()
                 .tabItem { Label("Lists", systemImage: "rectangle.stack") }
+            QuestsView()
+                .tabItem { Label("Quests", systemImage: "trophy") }
             StatisticsView()
                 .tabItem { Label("Stats", systemImage: "chart.bar.xaxis") }
             ProfileDashboardView()
@@ -173,5 +175,5 @@ private struct ProfileDashboardView: View {
 }
 
 #Preview {
-    AnilarperRootView().environmentObject(LibraryStore()).environmentObject(ReadingStore()).environmentObject(CustomListsStore())
+    AnilarperRootView().environmentObject(LibraryStore()).environmentObject(ReadingStore()).environmentObject(CustomListsStore()).environmentObject(QuestStore())
 }
