@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var reading: ReadingStore
     @State private var filter: AnimeStatus? = nil
     @State private var showingImporter = false
     @State private var showingExporter = false
@@ -63,7 +64,7 @@ struct LibraryView: View {
                         Button { showingImporter = true } label: { Label("Import MAL XML / JSON", systemImage: "square.and.arrow.down") }
                         Button {
                             do {
-                                exportDocument = AnimeLibraryDocument(data: try library.exportData())
+                                exportDocument = AnimeLibraryDocument(data: try library.exportData(reading: reading.titles))
                                 showingExporter = true
                             } catch { alertMessage = "Couldn't prepare your backup." }
                         } label: { Label("Export JSON backup", systemImage: "square.and.arrow.up") }
@@ -93,8 +94,8 @@ struct LibraryView: View {
                             }
                         }
                     } else {
-                        try library.importData(data)
-                        alertMessage = "Backup imported and merged with your library."
+                        try library.importData(data, readingStore: reading)
+                        alertMessage = "Backup imported and merged with your anime and reading shelves."
                     }
                 } catch {
                     alertMessage = "Import failed. Check that the selected file is a valid MAL XML export or Anilarper JSON backup."
