@@ -73,8 +73,9 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
                     try {
                         val candidates = retryAniListSearch(row.title)
                         val wanted = normalizeTitle(row.title)
-                        val target = candidates.firstOrNull {
-                            wanted == normalizeTitle(it.title) || wanted == normalizeTitle(it.nativeTitle)
+                        val target = candidates.firstOrNull { anime ->
+                            (listOf(anime.title, anime.romajiTitle, anime.nativeTitle) + anime.synonyms)
+                                .any { it.isNotBlank() && wanted == normalizeTitle(it) }
                         }
                         if (target == null) {
                             skipped++
@@ -100,7 +101,7 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
                     progress = index + 1
                     if (index < rows.lastIndex) delay(850)
                 }
-                diagnostics = issues
+                diagnostics = issues.filter { it.startsWith("Error:") }.take(8) + issues.filter { it.startsWith("Skipped:") }.take(8)
                 running = false
                 message = "Imported $imported • skipped $skipped • errors $errors. ${if (errors > 0) "See error details below." else "Review duplicates in your library."}"
             }
@@ -108,7 +109,7 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
             Text(if (running) "Importing…" else "Import ${rows.size} entries")
         }
         if (diagnostics.isNotEmpty()) {
-            Text("Import details (first 12)", color = Violet, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("Import details (errors and skipped titles)", color = Violet, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             diagnostics.forEach { Text(it, color = Muted, fontSize = 10.sp) }
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
