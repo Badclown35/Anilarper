@@ -23,8 +23,8 @@ enum MALImportService {
                     let candidates = try await client.searchAnime(entry.title)
                     let normalized = normalize(entry.title)
                     match = candidates.first(where: { candidate in
-                        [candidate.title.english, candidate.title.romaji, candidate.title.native]
-                            .compactMap { $0 } + (candidate.synonyms ?? [])
+                        ([candidate.title.english, candidate.title.romaji, candidate.title.native]
+                            .compactMap { $0 } + (candidate.synonyms ?? []))
                             .contains(where: { normalize($0) == normalized })
                     })
                 }
