@@ -68,6 +68,33 @@ struct AniListClient {
         return try JSONDecoder().decode(AniListReadingResponse.self, from: data).data.page.media
     }
 
+    func trendingAnime() async throws -> [AnimeSearchResult] {
+        let query = """
+        query {
+          Page(perPage: 20) {
+            media(type: ANIME, isAdult: false, sort: [TRENDING_DESC]) {
+              id
+              idMal
+              title { romaji english native }
+              synonyms
+              coverImage { medium }
+              episodes
+              averageScore
+            }
+          }
+        }
+        """
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["query": query])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw AniListError.invalidResponse
+        }
+        return try JSONDecoder().decode(AniListResponse.self, from: data).data.page.media
+    }
+
     func searchAnime(_ search: String) async throws -> [AnimeSearchResult] {
         let query = """
         query ($search: String) {
