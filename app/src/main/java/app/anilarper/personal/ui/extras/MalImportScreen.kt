@@ -1,6 +1,8 @@
 package app.anilarper.personal.ui.extras
 
-import android.content.Context
+import android.util.Xml
+import org.xmlpull.v1.XmlPullParser
+import java.io.StringReader
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -36,27 +38,27 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
     var rows by remember { mutableStateOf<List<MalRow>>(emptyList()) }
     var running by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0) }
-    var message by remember { mutableStateOf("Choose your anime-list export CSV from MyAnimeList.") }
+    var message by remember { mutableStateOf("Choose your MyAnimeList anime-list export (.xml).") }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
             val parsed = runCatching {
                 withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { parseMalCsv(it.readText()) }
+                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { parseMalExport(it.readText()) }
                         ?: error("Couldn't read that file.")
                 }
             }
             parsed.onSuccess { rows = it; message = "${it.size} entries ready. Import resolves titles against AniList." }
-                .onFailure { message = it.message ?: "CSV couldn't be parsed." }
+                .onFailure { message = it.message ?: "MAL export couldn't be parsed." }
         }
     }
     Column(modifier.fillMaxSize().padding(18.dp)) {
         Text("TRANSFER YOUR LIST", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
         Text("MAL import", color = White, fontSize = 27.sp, fontWeight = FontWeight.ExtraBold)
-        Text("Import an anime CSV export; titles are matched to AniList IDs.", color = Muted, fontSize = 12.sp)
+        Text("Import your MyAnimeList XML export; titles are matched to AniList IDs.", color = Muted, fontSize = 12.sp)
         Spacer(Modifier.height(12.dp))
-        Button(onClick = { picker.launch(arrayOf("text/*", "text/csv", "application/csv")) }, enabled = !running,
+        Button(onClick = { picker.launch(arrayOf("application/xml", "text/xml", "text/*")) }, enabled = !running,
             colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = Ink)) {
-            Icon(Icons.Default.FileOpen, contentDescription = null); Text("Choose MAL CSV")
+            Icon(Icons.Default.FileOpen, contentDescription = null); Text("Choose MAL XML")
         }
         Text(message, color = Muted, fontSize = 11.sp)
         if (running) LinearProgressIndicator(progress = { if (rows.isEmpty()) 0f else progress.toFloat()/rows.size }, modifier = Modifier.fillMaxWidth(), color = Violet)
@@ -104,6 +106,44 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
 }
 
 private fun normalizeTitle(value: String) = value.lowercase().replace(Regex("[^a-z0-9]"), "")
+
+private fun parseMalExport(raw: String): List<MalRow> {
+    if (raw.trimStart().startsWith("<")) return parseMalXml(raw)
+    return parseMalCsv(raw)
+}
+
+private fun parseMalXml(raw: String): List<MalRow> {
+    val parser = Xml.newPullParser()
+    parser.setInput(StringReader(raw))
+    val result = mutableListOf<MalRow>()
+    var fields: MutableMap<String, String>? = null
+    val accepted = setOf("series_title", "anime_title", "title", "my_score", "my_status",
+        "my_watched_episodes", "anime_episodes", "series_episodes")
+    var event = parser.eventType
+    while (event != XmlPullParser.END_DOCUMENT) {
+        when (event) {
+            XmlPullParser.START_TAG -> {
+                if (parser.name == "anime") fields = mutableMapOf()
+                else if (fields != null && parser.name in accepted) {
+                    fields!![parser.name] = parser.nextText().trim()
+                }
+            }
+            XmlPullParser.END_TAG -> if (parser.name == "anime") {
+                val item = fields.orEmpty()
+                val title = item["series_title"] ?: item["anime_title"] ?: item["title"].orEmpty()
+                if (title.isNotBlank()) result += MalRow(
+                    title, item["my_score"]?.toIntOrNull() ?: 0, item["my_status"].orEmpty(),
+                    item["my_watched_episodes"]?.toIntOrNull() ?: 0,
+                    (item["series_episodes"] ?: item["anime_episodes"])?.toIntOrNull()?.takeIf { it > 0 }
+                )
+                fields = null
+            }
+        }
+        event = parser.next()
+    }
+    if (result.isEmpty()) error("No anime entries found. Choose the MyAnimeList anime-list XML export.")
+    return result
+}
 
 private fun parseMalCsv(raw: String): List<MalRow> {
     val records = buildList {
