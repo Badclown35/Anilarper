@@ -6,6 +6,8 @@ struct LibraryView: View {
     @State private var filter: AnimeStatus? = nil
     @State private var showingImporter = false
     @State private var showingExporter = false
+    @State private var isImportingMAL = false
+    @State private var importProgress = ""
     @State private var exportDocument = AnimeLibraryDocument()
     @State private var alertMessage: String?
 
@@ -26,6 +28,13 @@ struct LibraryView: View {
                         }
                     }
                     .padding(.horizontal, 16)
+                }
+
+                if isImportingMAL {
+                    VStack(spacing: 8) {
+                        ProgressView().tint(.purple)
+                        Text(importProgress).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    }.padding(.horizontal, 20)
                 }
 
                 if visibleAnime.isEmpty {
@@ -51,7 +60,7 @@ struct LibraryView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button { showingImporter = true } label: { Label("Import JSON backup", systemImage: "square.and.arrow.down") }
+                        Button { showingImporter = true } label: { Label("Import MAL XML / JSON", systemImage: "square.and.arrow.down") }
                         Button {
                             do {
                                 exportDocument = AnimeLibraryDocument(data: try library.exportData())
@@ -61,14 +70,35 @@ struct LibraryView: View {
                     } label: { Image(systemName: "ellipsis.circle") }
                 }
             }
-            .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.json]) { result in
+            .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.json, .xml]) { result in
                 do {
                     let url = try result.get()
                     let access = url.startAccessingSecurityScopedResource()
                     defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    try library.importData(Data(contentsOf: url))
-                    alertMessage = "Backup imported and merged with your library."
-                } catch { alertMessage = "Import failed. Make sure this is a valid Anilarper JSON backup." }
+                    let data = try Data(contentsOf: url)
+                    if url.pathExtension.lowercased() == "xml" {
+                        isImportingMAL = true
+                        importProgress = "Preparing MAL export…"
+                        Task {
+                            defer { isImportingMAL = false }
+                            do {
+                                let summary = try await MALImportService.importXML(
+                                    data, using: AniListClient(), into: library
+                                ) { current, total, title in
+                                    importProgress = "Matching \(current) of \(total): \(title)"
+                                }
+                                alertMessage = "MAL import finished. Imported \(summary.imported), skipped \(summary.skipped), total \(summary.total)."
+                            } catch {
+                                alertMessage = "Couldn't read this MAL XML export."
+                            }
+                        }
+                    } else {
+                        try library.importData(data)
+                        alertMessage = "Backup imported and merged with your library."
+                    }
+                } catch {
+                    alertMessage = "Import failed. Check that the selected file is a valid MAL XML export or Anilarper JSON backup."
+                }
             }
             .fileExporter(isPresented: $showingExporter, document: exportDocument,
                           contentType: .json, defaultFilename: "anilarper-library") { result in
