@@ -28,8 +28,17 @@ struct Anime: Identifiable, Codable, Hashable {
     var score: Double?
     var status: AnimeStatus
     var progress: Int
+    var format: String? = nil
+    var airingStatus: String? = nil
+    var description: String? = nil
+    var season: String? = nil
+    var seasonYear: Int? = nil
+    var genres: [String]? = nil
+    var studios: [String]? = nil
+    var lastWatchedAt: Int64? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, malId, title, nativeTitle, coverImageURL, episodes, score, status, progress
+        case format, airingStatus, description, season, seasonYear, genres, studios, lastWatchedAt
     }
 }
