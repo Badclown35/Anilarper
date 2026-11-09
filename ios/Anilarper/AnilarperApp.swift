@@ -6,6 +6,7 @@ struct AnilarperApp: App {
         WindowGroup {
             AnilarperRootView()
                 .environmentObject(LibraryStore())
+                .environmentObject(ReadingStore())
                 .preferredColorScheme(.dark)
         }
     }
