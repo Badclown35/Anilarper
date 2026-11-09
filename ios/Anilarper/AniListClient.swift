@@ -42,6 +42,7 @@ struct AniListClient {
                   sort: [SEARCH_MATCH]) {
               id
               title { romaji english native }
+              synonyms
               coverImage { medium }
               format
               status
