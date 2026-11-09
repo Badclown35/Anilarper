@@ -144,15 +144,23 @@ private struct ReadingShelfRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(title.title).font(.subheadline.weight(.semibold)).lineLimit(2)
                 Text(title.readingStatus.label).font(.caption).foregroundStyle(.purple)
-                Text("\(title.progress)/\(title.chapters.map(String.init) ?? "?") chapters")
+                Text("\(title.progress)/\(title.chapters.map { String($0) } ?? "?") chapters")
                     .font(.caption2).foregroundStyle(.secondary)
-                HStack(spacing: 12) {
-                    Stepper("Ch. \(title.progress)", value: Binding(
-                        get: { title.progress },
-                        set: { title.progress = max(0, $0); reading.update(title) }
-                    ), in: 0...max(title.chapters ?? 999, title.progress))
-                    .font(.caption2)
-                }
+                Stepper("Ch. \(title.progress)", value: Binding(
+                    get: { title.progress },
+                    set: {
+                        title.progress = max(0, $0)
+                        if let total = title.chapters, title.progress >= total { title.readingStatus = .completed }
+                        else if title.progress > 0 && title.readingStatus == .planning { title.readingStatus = .reading }
+                        reading.update(title)
+                    }
+                ), in: 0...max(title.chapters ?? 999, title.progress))
+                .font(.caption2)
+                Stepper("Vol. \(title.volumeProgress)", value: Binding(
+                    get: { title.volumeProgress },
+                    set: { title.volumeProgress = max(0, $0); reading.update(title) }
+                ), in: 0...max(title.volumes ?? 999, title.volumeProgress))
+                .font(.caption2)
                 Menu {
                     ForEach(ReadingStatus.allCases, id: \.self) { status in
                         Button(status.label) {
