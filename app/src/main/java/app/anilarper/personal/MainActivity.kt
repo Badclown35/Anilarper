@@ -135,7 +135,7 @@ private fun AnilarperApp() {
                 composable("More") { MoreScreen { route -> navController.navigate(route) { launchSingleTop = true } } }
                 composable("CustomLists") { CustomListsScreen(library, Modifier.fillMaxSize()) }
                 composable("Recommendations") { RecommendationsScreen(library, { animeViewModel.toggle(it) }, Modifier.fillMaxSize()) }
-                composable("MALImport") { MalImportScreen({ animeViewModel.toggle(it) }, Modifier.fillMaxSize()) }
+                composable("MALImport") { MalImportScreen({ animeViewModel.importAnime(it) }, Modifier.fillMaxSize()) }
                 composable("Library") {
                     LibraryScreen(Modifier.fillMaxSize(), library,
                         onRemove = { animeViewModel.remove(it) },
