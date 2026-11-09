@@ -37,6 +37,26 @@ class AnimeLibraryViewModel(private val repository: LibraryRepository) : ViewMod
         }
     }
 
+    /** Import is an upsert, never a toggle: an existing entry must not disappear. */
+    fun importAnime(anime: Anime) {
+        viewModelScope.launch {
+            writeMutex.withLock {
+                val current = _library.value
+                val existing = current.firstOrNull { it.id == anime.id }
+                val imported = if (existing == null) anime else existing.copy(
+                    watchStatus = anime.watchStatus,
+                    progress = anime.progress,
+                    score = anime.score ?: existing.score,
+                    lastWatchedAt = anime.lastWatchedAt
+                )
+                val updated = if (existing == null) current + imported
+                    else current.map { if (it.id == anime.id) imported else it }
+                repository.saveAnimeToRoom(updated)
+                _library.value = updated
+            }
+        }
+    }
+
     fun update(anime: Anime) {
         viewModelScope.launch {
             writeMutex.withLock {
