@@ -173,7 +173,7 @@ struct AnimeLibraryDocument: FileDocument {
     init(configuration: ReadConfiguration) throws {
         data = configuration.file.regularFileContents ?? Data("[]".utf8)
     }
-    func fileWrapper(configuration: WriteConfiguration) throws {
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         FileWrapper(regularFileWithContents: data)
     }
 }
