@@ -147,7 +147,7 @@ li{margin:12px 0;overflow-wrap:anywhere}progress{width:100%;height:18px}</style>
 <script>
 const token=document.getElementById('token'), statusEl=document.getElementById('status'), bar=document.getElementById('progress');
 async function load(){let r=await fetch('/api/videos');let j=await r.json();let ul=document.getElementById('list');ul.replaceChildren();
-for(let v of j.videos){let li=document.createElement('li'),a=document.createElement('a');a.href=v.streamPath;a.textContent=v.title;a.style.color='#9bb8ff';a.target='_blank';li.append(a,document.createTextNode(' • '+(v.size/1048576).toFixed(1)+' MB'));ul.append(li)}
+for(let v of j.videos){let li=document.createElement('li'),a=document.createElement('a'),del=document.createElement('button');a.href=v.streamPath;a.textContent=v.title;a.style.color='#9bb8ff';a.target='_blank';del.textContent='Delete';del.style.marginLeft='10px';del.onclick=async()=>{if(!token.value){statusEl.textContent='Enter admin token to delete videos.';return}if(!confirm('Delete "'+v.title+'" from this server?'))return;del.disabled=true;let r=await fetch('/api/videos/'+encodeURIComponent(v.id),{method:'DELETE',headers:{'Authorization':'Bearer '+token.value}});statusEl.textContent=r.ok?'Deleted '+v.title:'Delete failed: '+await r.text();if(r.ok)await load();else del.disabled=false};li.append(a,document.createTextNode(' • '+(v.size/1048576).toFixed(1)+' MB '),del);ul.append(li)}
 if(!j.videos.length)ul.textContent='No videos uploaded yet.'}
 async function upload(){let fs=[...document.getElementById('files').files];if(!token.value||!fs.length){statusEl.textContent='Enter token and select MP4 files.';return}
 for(let f of fs){statusEl.textContent='Uploading '+f.name+'…';bar.hidden=false;bar.value=0;
