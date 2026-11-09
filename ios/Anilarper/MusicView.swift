@@ -57,16 +57,17 @@ struct MusicView: View {
                     ForEach(music.tracks) { track in
                         HStack(spacing: 10) {
                             Button {
-                                do { player.play(track, url: try music.fileURL(for: track)) }
-                                catch { message = "Couldn't open this audio file." }
+                                if player.currentTrackID == track.id {
+                                    player.toggle()
+                                } else {
+                                    do { player.play(track, url: try music.fileURL(for: track)) }
+                                    catch { message = "Couldn't open this audio file." }
+                                }
                             } label: {
                                 Image(systemName: player.currentTrackID == track.id && player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                                     .font(.title2).foregroundStyle(.purple)
                             }
                             .buttonStyle(.plain)
-                            .simultaneousGesture(TapGesture().onEnded {
-                                if player.currentTrackID == track.id { player.toggle() }
-                            })
                             Text(track.title).font(.subheadline).lineLimit(2)
                             Spacer()
                             Button(role: .destructive) {
