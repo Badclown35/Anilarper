@@ -7,6 +7,7 @@ struct AnimeSearchView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var searched = false
+    @State private var isTrending = true
 
     private let client = AniListClient()
 
@@ -40,11 +41,15 @@ struct AnimeSearchView: View {
                                            description: Text(searched ? "Try another title." : "Search the AniList catalogue and add titles to your library."))
                     Spacer()
                 } else {
-                    List(results) { result in
-                        SearchResultRow(result: result, isSaved: library.anime.contains { $0.id == result.id }) {
-                            library.add(result.asAnime)
+                    List {
+                        Section(isTrending ? "TRENDING NOW" : "SEARCH RESULTS") {
+                            ForEach(results) { result in
+                                SearchResultRow(result: result, isSaved: library.anime.contains { $0.id == result.id }) {
+                                    library.add(result.asAnime)
+                                }
+                                .listRowBackground(Color.clear)
+                            }
                         }
-                        .listRowBackground(Color.clear)
                     }
                     .listStyle(.plain)
                 }
@@ -52,6 +57,11 @@ struct AnimeSearchView: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .navigationTitle("Discover")
+            .onAppear {
+                if results.isEmpty && !searched && !isLoading {
+                    Task { await loadTrending() }
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { Task { await search() } } label: {
@@ -64,12 +74,26 @@ struct AnimeSearchView: View {
     }
 
     @MainActor
+    private func loadTrending() async {
+        isLoading = true
+        errorMessage = nil
+        isTrending = true
+        defer { isLoading = false }
+        do {
+            results = try await client.trendingAnime()
+        } catch {
+            errorMessage = "Couldn't load trending anime. Check your connection and try again."
+        }
+    }
+
+    @MainActor
     private func search() async {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return }
         isLoading = true
         errorMessage = nil
         searched = true
+        isTrending = false
         defer { isLoading = false }
         do {
             results = try await client.searchAnime(term)
