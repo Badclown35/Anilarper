@@ -6,6 +6,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -57,7 +59,6 @@ private fun AnilarperApp() {
     val context = LocalContext.current
     val navController = rememberNavController()
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route ?: "Home"
-    var moreOpen by remember { mutableStateOf(false) }
     val activity = context as ComponentActivity
     val collectionFactory = remember(context) { CollectionViewModelFactory(context.applicationContext) }
     val animeViewModel = remember(activity) {
@@ -86,13 +87,12 @@ private fun AnilarperApp() {
                     listOf("Home" to Icons.Default.Home, "Discover" to Icons.Default.Explore,
                         "Library" to Icons.Default.Bookmarks, "More" to Icons.Default.MoreHoriz).forEach { (label, icon) ->
                         val isSelected = if (label == "More")
-                            currentRoute in setOf("Read", "Music", "Quests", "Profile", "Stats", "Backup", "History")
+                            currentRoute in setOf("More", "Read", "Music", "Quests", "Profile", "Stats", "Backup", "History", "CustomLists", "Recommendations", "MALImport")
                         else currentRoute == label
                         NavigationBarItem(
                             selected = isSelected,
                             onClick = {
-                                if (label == "More") moreOpen = true
-                                else navController.navigate(label) {
+                                navController.navigate(label) {
                                     // Always navigate to the explicitly selected top-level destination.
                                     // Restoring saved stacks here was causing the bottom bar to reopen
                                     // an unrelated More destination (for example Music or Read).
@@ -131,6 +131,7 @@ private fun AnilarperApp() {
                         Modifier.fillMaxSize(), library.map { it.id }.toSet(), discoverViewModel
                     ) { anime -> animeViewModel.toggle(anime) }
                 }
+                composable("More") { MoreScreen { route -> navController.navigate(route) { launchSingleTop = true } } }
                 composable("CustomLists") { CustomListsScreen(library, Modifier.fillMaxSize()) }
                 composable("Recommendations") { RecommendationsScreen(library, { animeViewModel.toggle(it) }, Modifier.fillMaxSize()) }
                 composable("MALImport") { MalImportScreen({ animeViewModel.toggle(it) }, Modifier.fillMaxSize()) }
@@ -161,40 +162,50 @@ private fun AnilarperApp() {
                 composable("Profile") { ProfileScreen(context, library, readingLibrary, Modifier.fillMaxSize()) }
             }
         }
-        if (moreOpen) {
-            ModalBottomSheet(onDismissRequest = { moreOpen = false }, containerColor = Panel) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 26.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("MORE FROM ANILARPER", color = Violet, fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                    listOf(
-                        Triple("Read", "Manga & light novels", Icons.Default.MenuBook),
-                        Triple("Music", "Your soundtrack sources", Icons.Default.LibraryMusic),
-                        Triple("Quests", "Milestones & XP", Icons.Default.EmojiEvents),
-                        Triple("Stats", "Your anime and reading activity", Icons.Default.Insights),
-                        Triple("History", "Recently updated episodes", Icons.Default.History),
-                        Triple("Backup", "Export or restore your collection", Icons.Default.Backup),
-                        Triple("Profile", "Your personal space", Icons.Default.Person),
-                        Triple("CustomLists", "Your own anime collections", Icons.Default.Bookmarks),
-                        Triple("Recommendations", "Find your next favorite", Icons.Default.AutoAwesome),
-                        Triple("MALImport", "Bring over a MAL anime CSV", Icons.Default.FileDownload)
-                    ).forEach { (label, subtitle, icon) ->
-                        Row(Modifier.fillMaxWidth().clickable { navController.navigate(label) { launchSingleTop = true }; moreOpen = false }
-                            .background(Panel2, RoundedCornerShape(14.dp)).padding(15.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(13.dp)) {
-                            Icon(icon, contentDescription = null, tint = Violet)
-                            Column(Modifier.weight(1f)) {
-                                Text(label, color = White, fontWeight = FontWeight.SemiBold)
-                                Text(subtitle, color = Muted, fontSize = 11.sp)
-                            }
-                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
-
+@Composable
+private fun MoreScreen(onNavigate: (String) -> Unit) {
+    val entries = listOf(
+        Triple("Read", "Manga & light novels", Icons.Default.MenuBook),
+        Triple("Music", "Soundtracks and local tracks", Icons.Default.LibraryMusic),
+        Triple("Quests", "Milestones & XP", Icons.Default.EmojiEvents),
+        Triple("Stats", "Anime and reading activity", Icons.Default.Insights),
+        Triple("History", "Recently updated episodes", Icons.Default.History),
+        Triple("Backup", "Export or restore your collection", Icons.Default.Backup),
+        Triple("Profile", "Personalize your profile", Icons.Default.Person),
+        Triple("CustomLists", "Create and manage anime collections", Icons.Default.Bookmarks),
+        Triple("Recommendations", "Discover anime based on your library", Icons.Default.AutoAwesome),
+        Triple("MALImport", "Import your MyAnimeList anime CSV", Icons.Default.FileDownload)
+    )
+    Column(
+        Modifier.fillMaxSize().background(Ink).verticalScroll(rememberScrollState())
+            .padding(horizontal = 18.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text("MORE", color = Violet, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        Text("Your tools & extras", color = White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+        Text("Everything beyond your main library.", color = Muted, fontSize = 13.sp)
+        Spacer(Modifier.height(6.dp))
+        entries.forEach { (route, subtitle, icon) ->
+            Row(
+                Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp))
+                    .clickable { onNavigate(route) }.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Box(Modifier.size(42.dp).background(Violet.copy(alpha = .13f), RoundedCornerShape(12.dp)),
+                    contentAlignment = Alignment.Center) {
+                    Icon(icon, contentDescription = null, tint = Violet)
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(if (route == "MALImport") "MAL Import" else route, color = White, fontWeight = FontWeight.SemiBold)
+                    Text(subtitle, color = Muted, fontSize = 12.sp)
+                }
+                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+    }
+}
