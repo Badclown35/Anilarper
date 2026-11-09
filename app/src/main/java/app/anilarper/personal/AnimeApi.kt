@@ -104,7 +104,7 @@ object AniListApi {
     suspend fun findByMalId(malId: Int): Anime? = withContext(Dispatchers.IO) {
         if (malId <= 0) return@withContext null
         val gql = """
-            query ($malId: Int) {
+            query (${"${'$}"}malId: Int) {
                 Media(idMal: $malId, type: ANIME) {
                     $FIELDS
                 }
