@@ -5,6 +5,8 @@ import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import java.io.IOException
 
+data class MalAnimeCharacter(val id: Int, val name: String, val role: String, val voiceActor: String, val voiceActorLanguage: String, val url: String)
+
 data class MalScrapedData(
     val url: String,
     val title: String,
