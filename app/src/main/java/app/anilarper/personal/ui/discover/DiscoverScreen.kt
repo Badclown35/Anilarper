@@ -311,6 +311,30 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, viewModel:
                             if (mal.studios.isNotEmpty()) Text("MAL studios: ${mal.studios.joinToString()}", color = Muted, fontSize = 10.sp)
                             if (mal.producers.isNotEmpty()) Text("Producers: ${mal.producers.joinToString()}", color = Muted, fontSize = 10.sp)
                             if (mal.licensors.isNotEmpty()) Text("Licensors: ${mal.licensors.joinToString()}", color = Muted, fontSize = 10.sp)
+                            if (mal.characters.isNotEmpty()) {
+                                Divider(color = Panel)
+                                Text("MAL CHARACTERS & VOICE ACTORS", color = Violet, fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                mal.characters.forEach { character ->
+                                    Row(
+                                        Modifier.fillMaxWidth().clickable {
+                                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(character.url)))
+                                        }.background(Panel, RoundedCornerShape(8.dp)).padding(9.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(character.name, color = White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                            Text(character.role.ifBlank { "Character" }, color = Violet, fontSize = 10.sp)
+                                            if (character.voiceActor.isNotBlank()) Text(
+                                                "VA: ${character.voiceActor}${character.voiceActorLanguage.takeIf { it.isNotBlank() }?.let { " • $it" } ?: ""}",
+                                                color = Muted, fontSize = 10.sp
+                                            )
+                                        }
+                                        Icon(Icons.Default.OpenInNew, contentDescription = "Open MAL character", tint = Muted)
+                                    }
+                                }
+                            }
                             if (mal.synopsis.isNotBlank()) Text(mal.synopsis, color = Muted, fontSize = 12.sp)
                             TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(mal.url))) }) {
                                 Text("Open MAL page", color = Violet)
