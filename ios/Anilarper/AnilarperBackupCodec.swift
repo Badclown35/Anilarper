@@ -8,52 +8,55 @@ struct ImportedAnilarperBackup {
 enum AnilarperBackupCodec {
     static func encode(anime: [Anime], reading: [ReadingTitle]) throws -> Data {
         let animeRows: [[String: Any]] = anime.map { item in
-            [
+            var row: [String: Any] = [
                 "id": item.id,
-                "malId": item.malId as Any? ?? NSNull(),
                 "title": item.title,
                 "nativeTitle": item.nativeTitle ?? "",
                 "cover": item.coverImageURL?.absoluteString ?? "",
                 "format": item.format ?? "",
                 "status": item.airingStatus ?? "",
-                "episodes": item.episodes as Any? ?? NSNull(),
-                "score": item.score as Any? ?? NSNull(),
                 "description": item.description ?? "",
                 "watchStatus": item.status.rawValue.uppercased(),
                 "progress": item.progress,
                 "lastWatchedAt": item.lastWatchedAt ?? 0,
                 "season": item.season ?? "",
-                "seasonYear": item.seasonYear as Any? ?? NSNull(),
                 "genres": item.genres ?? [],
                 "studios": item.studios ?? []
             ]
+            row["malId"] = item.malId.map { $0 as Any } ?? NSNull()
+            row["episodes"] = item.episodes.map { $0 as Any } ?? NSNull()
+            row["score"] = item.score.map { $0 as Any } ?? NSNull()
+            row["seasonYear"] = item.seasonYear.map { $0 as Any } ?? NSNull()
+            return row
         }
 
         let readingRows: [[String: Any]] = reading.map { item in
-            [
+            var row: [String: Any] = [
                 "id": item.id,
                 "title": item.title,
                 "nativeTitle": item.nativeTitle ?? "",
                 "cover": item.coverImageURL?.absoluteString ?? "",
                 "format": item.format,
                 "status": item.status,
-                "chapters": item.chapters as Any? ?? NSNull(),
-                "volumes": item.volumes as Any? ?? NSNull(),
                 "description": item.description,
                 "kind": item.kind == .novel ? "NOVEL" : "MANGA",
                 "progress": item.progress,
                 "volumeProgress": item.volumeProgress,
                 "readingStatus": item.readingStatus.rawValue.uppercased()
             ]
+            row["chapters"] = item.chapters.map { $0 as Any } ?? NSNull()
+            row["volumes"] = item.volumes.map { $0 as Any } ?? NSNull()
+            return row
         }
 
+        let preferences: [String: Any] = [
+            "library": animeRows,
+            "readingLibrary": readingRows
+        ]
         let root: [String: Any] = [
             "format": "anilarper-backup",
             "version": 1,
-            "preferences": [
-                "library": animeRows,
-                "readingLibrary": readingRows
-            ]
+            "preferences": preferences
         ]
         return try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
     }
