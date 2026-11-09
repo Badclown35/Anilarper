@@ -124,7 +124,7 @@ private struct LibraryAnimeRow: View {
             }
             Spacer()
             Stepper(value: Binding(get: { anime.progress }, set: { anime.progress = max(0, $0); library.update(anime) }),
-                    in: 0...(anime.episodes ?? max(anime.progress + 1, 999))) {
+                    in: 0...max(anime.episodes ?? 999, anime.progress)) {
                 Text("\(anime.progress)").font(.caption.monospacedDigit())
             }
             .labelsHidden()
@@ -134,17 +134,6 @@ private struct LibraryAnimeRow: View {
     }
 }
 
-private extension AnimeStatus {
-    var label: String {
-        switch self {
-        case .planning: "Planning"
-        case .watching: "Watching"
-        case .completed: "Completed"
-        case .paused: "Paused"
-        case .dropped: "Dropped"
-        }
-    }
-}
 
 struct AnimeLibraryDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.json] }
