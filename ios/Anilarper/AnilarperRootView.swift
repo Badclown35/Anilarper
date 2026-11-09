@@ -9,6 +9,8 @@ struct AnilarperRootView: View {
                 .tabItem { Label("Library", systemImage: "books.vertical") }
             AnimeSearchView()
                 .tabItem { Label("Discover", systemImage: "sparkles") }
+            ReadingShelfView()
+                .tabItem { Label("Reading", systemImage: "book.closed") }
             StatisticsView()
                 .tabItem { Label("Stats", systemImage: "chart.bar.xaxis") }
             ProfileDashboardView()
@@ -169,5 +171,5 @@ private struct ProfileDashboardView: View {
 }
 
 #Preview {
-    AnilarperRootView().environmentObject(LibraryStore())
+    AnilarperRootView().environmentObject(LibraryStore()).environmentObject(ReadingStore())
 }
