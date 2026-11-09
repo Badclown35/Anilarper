@@ -48,6 +48,7 @@ import app.anilarper.personal.ui.extras.RecommendationsScreen
 import app.anilarper.personal.ui.extras.MalImportScreen
 import app.anilarper.personal.ui.extras.SeasonalScheduleScreen
 import app.anilarper.personal.ui.extras.LocalVideoPlayerScreen
+import app.anilarper.personal.ui.extras.CommunityVideosScreen
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,7 +91,7 @@ private fun AnilarperApp() {
                         "Library" to Icons.Default.Bookmarks, "Read" to Icons.Default.MenuBook,
                         "More" to Icons.Default.MoreHoriz).forEach { (label, icon) ->
                         val isSelected = if (label == "More")
-                            currentRoute in setOf("More", "Read", "Music", "Quests", "Profile", "Stats", "Backup", "History", "CustomLists", "Recommendations", "MALImport", "Schedule", "VideoPlayer")
+                            currentRoute in setOf("More", "Read", "Music", "Quests", "Profile", "Stats", "Backup", "History", "CustomLists", "Recommendations", "MALImport", "Schedule", "VideoPlayer", "CommunityVideos")
                         else currentRoute == label
                         NavigationBarItem(
                             selected = isSelected,
@@ -140,6 +141,7 @@ private fun AnilarperApp() {
                 composable("MALImport") { MalImportScreen({ animeViewModel.importAnime(it) }, Modifier.fillMaxSize()) }
                 composable("Schedule") { SeasonalScheduleScreen({ animeViewModel.toggle(it) }, library.map { it.id }.toSet(), Modifier.fillMaxSize()) }
                 composable("VideoPlayer") { LocalVideoPlayerScreen(Modifier.fillMaxSize()) }
+                composable("CommunityVideos") { CommunityVideosScreen(Modifier.fillMaxSize()) }
                 composable("Library") {
                     LibraryScreen(Modifier.fillMaxSize(), library,
                         onRemove = { animeViewModel.remove(it) },
@@ -184,7 +186,8 @@ private fun MoreScreen(onNavigate: (String) -> Unit) {
         Triple("Recommendations", "Discover anime based on your library", Icons.Default.AutoAwesome),
         Triple("MALImport", "Import your MyAnimeList anime CSV", Icons.Default.FileDownload),
         Triple("Schedule", "Browse anime by season and year", Icons.Default.CalendarMonth),
-        Triple("VideoPlayer", "Play video files from your device", Icons.Default.VideoLibrary)
+        Triple("VideoPlayer", "Play video files from your device", Icons.Default.VideoLibrary),
+        Triple("CommunityVideos", "Browse videos shared from the community server", Icons.Default.Cloud)
     )
     Column(
         Modifier.fillMaxSize().background(Ink).verticalScroll(rememberScrollState())
