@@ -80,6 +80,9 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, viewModel:
     var detail by remember { mutableStateOf<Anime?>(null) }
     var detailLoading by remember { mutableStateOf(false) }
     var detailError by remember { mutableStateOf<String?>(null) }
+    var malScraped by remember { mutableStateOf<MalScrapedData?>(null) }
+    var malScrapeLoading by remember { mutableStateOf(false) }
+    var malScrapeError by remember { mutableStateOf<String?>(null) }
     var franchise by remember { mutableStateOf<FranchiseResult?>(null) }
     var franchiseLoading by remember { mutableStateOf(false) }
     var franchiseError by remember { mutableStateOf<String?>(null) }
@@ -266,6 +269,55 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, viewModel:
                         color = Muted, fontSize = 11.sp)
                     if (shown.genres.isNotEmpty()) Text(shown.genres.joinToString(" • "), color = Violet, fontSize = 11.sp)
                     if (shown.studios.isNotEmpty()) Text("Studio: ${shown.studios.joinToString()}", color = Muted, fontSize = 11.sp)
+                    if (shown.malId != null) {
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    malScrapeLoading = true
+                                    malScrapeError = null
+                                    try {
+                                        malScraped = MalPageScraper.scrapeAnime(shown.malId!!)
+                                    } catch (e: Exception) {
+                                        malScrapeError = e.message ?: "MAL scraping failed."
+                                    } finally {
+                                        malScrapeLoading = false
+                                    }
+                                }
+                            },
+                            enabled = !malScrapeLoading,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (malScrapeLoading) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                            else Icon(Icons.Default.Public, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (malScrapeLoading) "Scraping MAL…" else "Scrape extra info from MAL")
+                        }
+                        malScrapeError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
+                        malScraped?.let { mal ->
+                            Divider(color = Panel)
+                            Text("MYANIMELIST SCRAPE", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                            Text("MAL score: ${mal.score.ifBlank { "N/A" }} • Rank: ${mal.rank.ifBlank { "N/A" }} • Popularity: ${mal.popularity}",
+                                color = White, fontSize = 11.sp)
+                            Text("Members: ${mal.members} • Favorites: ${mal.favorites} • Scored by: ${mal.scoredBy}",
+                                color = Muted, fontSize = 10.sp)
+                            Text("Type: ${mal.type} • Episodes: ${mal.episodes} • Rating: ${mal.rating}",
+                                color = Muted, fontSize = 10.sp)
+                            Text("Aired: ${mal.aired} • Premiered: ${mal.premiered} • Duration: ${mal.duration}",
+                                color = Muted, fontSize = 10.sp)
+                            if (mal.japaneseTitle != "N/A" || mal.englishTitle != "N/A")
+                                Text("Titles: ${mal.japaneseTitle} / ${mal.englishTitle}", color = Muted, fontSize = 10.sp)
+                            if (mal.genres.isNotEmpty()) Text("MAL genres: ${mal.genres.joinToString(" • ")}", color = Violet, fontSize = 10.sp)
+                            if (mal.themes.isNotEmpty()) Text("Themes: ${mal.themes.joinToString(" • ")}", color = Muted, fontSize = 10.sp)
+                            if (mal.studios.isNotEmpty()) Text("MAL studios: ${mal.studios.joinToString()}", color = Muted, fontSize = 10.sp)
+                            if (mal.producers.isNotEmpty()) Text("Producers: ${mal.producers.joinToString()}", color = Muted, fontSize = 10.sp)
+                            if (mal.licensors.isNotEmpty()) Text("Licensors: ${mal.licensors.joinToString()}", color = Muted, fontSize = 10.sp)
+                            if (mal.synopsis.isNotBlank()) Text(mal.synopsis, color = Muted, fontSize = 12.sp)
+                            TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(mal.url))) }) {
+                                Text("Open MAL page", color = Violet)
+                            }
+                        }
+                    }
+
                     Text(shown.description.ifBlank { "No synopsis available." }, color = Muted, fontSize = 12.sp)
                     if (detailLoading) CircularProgressIndicator(color = Violet, modifier = Modifier.size(20.dp))
                     detailError?.let { Text(it, color = Muted, fontSize = 10.sp) }
