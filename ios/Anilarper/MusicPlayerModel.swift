@@ -10,6 +10,8 @@ final class MusicPlayerModel: ObservableObject {
     private var player: AVPlayer?
 
     func play(_ track: LocalAudioTrack, url: URL) {
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        try? AVAudioSession.sharedInstance().setActive(true)
         player?.pause()
         let item = AVPlayerItem(url: url)
         player = AVPlayer(playerItem: item)
