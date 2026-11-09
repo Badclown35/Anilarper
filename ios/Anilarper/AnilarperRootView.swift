@@ -11,14 +11,6 @@ struct AnilarperRootView: View {
                 .tabItem { Label("Discover", systemImage: "sparkles") }
             ReadingShelfView()
                 .tabItem { Label("Reading", systemImage: "book.closed") }
-            CustomListsView()
-                .tabItem { Label("Lists", systemImage: "rectangle.stack") }
-            QuestsView()
-                .tabItem { Label("Quests", systemImage: "trophy") }
-            MusicView()
-                .tabItem { Label("Music", systemImage: "waveform") }
-            StatisticsView()
-                .tabItem { Label("Stats", systemImage: "chart.bar.xaxis") }
             ProfileDashboardView()
                 .tabItem { Label("Profile", systemImage: "person.crop.circle") }
         }
@@ -165,6 +157,12 @@ private struct ProfileDashboardView: View {
                     LabeledContent("Watching", value: "\(library.anime.filter { $0.status == .watching }.count)")
                     LabeledContent("Completed", value: "\(library.anime.filter { $0.status == .completed }.count)")
                     LabeledContent("Planning", value: "\(library.anime.filter { $0.status == .planning }.count)")
+                }
+                Section("More features") {
+                    NavigationLink { StatisticsView() } label: { Label("Statistics", systemImage: "chart.bar.xaxis") }
+                    NavigationLink { CustomListsView() } label: { Label("Custom lists", systemImage: "rectangle.stack") }
+                    NavigationLink { QuestsView() } label: { Label("Quests & milestones", systemImage: "trophy") }
+                    NavigationLink { MusicView() } label: { Label("Soundtrack", systemImage: "waveform") }
                 }
                 Section("About") {
                     LabeledContent("App", value: "Anilarper for iOS")
