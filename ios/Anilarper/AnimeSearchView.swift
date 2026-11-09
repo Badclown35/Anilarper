@@ -20,7 +20,7 @@ struct AnimeSearchView: View {
                         .submitLabel(.search)
                         .onSubmit { Task { await search() } }
                     if !query.isEmpty {
-                        Button { query = ""; results = []; searched = false } label: {
+                        Button { query = ""; results = []; searched = false; Task { await loadTrending() } } label: {
                             Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                         }
                     }
@@ -64,10 +64,10 @@ struct AnimeSearchView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { Task { await search() } } label: {
+                    Button { Task { if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { await loadTrending() } else { await search() } } } label: {
                         Image(systemName: "arrow.clockwise")
                     }
-                    .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoading)
+                    .disabled(isLoading)
                 }
             }
         }
