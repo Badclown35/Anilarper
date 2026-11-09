@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import Combine
 
 @MainActor
 final class MusicPlayerModel: ObservableObject {
@@ -9,15 +10,13 @@ final class MusicPlayerModel: ObservableObject {
     private var player: AVPlayer?
 
     func play(_ track: LocalAudioTrack, url: URL) {
-        do {
-            player?.pause()
-            let item = AVPlayerItem(url: url)
-            player = AVPlayer(playerItem: item)
-            currentTrackID = track.id
-            player?.play()
-            isPlaying = true
-            message = nil
-        }
+        player?.pause()
+        let item = AVPlayerItem(url: url)
+        player = AVPlayer(playerItem: item)
+        currentTrackID = track.id
+        player?.play()
+        isPlaying = true
+        message = nil
     }
 
     func toggle() {
