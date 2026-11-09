@@ -27,8 +27,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 
-private data class MalRow(val title: String, val score: Int, val status: String, val progress: Int, val total: Int?)
+private data class MalRow(val title: String, val score: Int, val status: String, val progress: Int, val total: Int?, val malId: Int? = null)
 private data class MalImportResult(val imported: Int, val skipped: Int, val errors: Int)
 
 /** Import a MyAnimeList anime-list CSV export and resolve titles to AniList IDs. */
@@ -71,12 +75,7 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
                 val issues = mutableListOf<String>()
                 rows.forEachIndexed { index, row ->
                     try {
-                        val candidates = retryAniListSearch(row.title)
-                        val wanted = normalizeTitle(row.title)
-                        val target = candidates.firstOrNull { anime ->
-                            (listOf(anime.title, anime.romajiTitle, anime.nativeTitle) + anime.synonyms)
-                                .any { it.isNotBlank() && wanted == normalizeTitle(it) }
-                        }
+                        val target = resolveMalAnime(row)
                         if (target == null) {
                             skipped++
                             if (issues.size < 12) issues += "Skipped: ${row.title} (no exact AniList title match)"
@@ -139,6 +138,98 @@ private suspend fun retryAniListSearch(title: String): List<Anime> {
     throw last ?: IllegalStateException("AniList search failed")
 }
 
+private suspend fun retryAniListMalId(malId: Int): Anime? {
+    var last: Exception? = null
+    repeat(3) { attempt ->
+        try {
+            return AniListApi.findByMalId(malId)
+        } catch (e: Exception) {
+            last = e
+            if (attempt < 2) delay(1500L * (attempt + 1))
+        }
+    }
+    throw last ?: IllegalStateException("AniList MAL-ID lookup failed")
+}
+
+private data class JikanCandidate(val malId: Int, val titles: List<String>)
+
+private object JikanImportApi {
+    suspend fun search(title: String): List<JikanCandidate> = withContext(Dispatchers.IO) {
+        val encoded = URLEncoder.encode(title, "UTF-8")
+        val connection = (URL("https://api.jikan.moe/v4/anime?q=$encoded&limit=10").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 12000
+            readTimeout = 18000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "Anilarper/1.0 (MAL import)")
+        }
+        try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("Jikan returned HTTP $code")
+            val data = JSONObject(response).optJSONArray("data") ?: return@withContext emptyList()
+            buildList {
+                for (i in 0 until data.length()) {
+                    val item = data.optJSONObject(i) ?: continue
+                    val id = item.optInt("mal_id")
+                    if (id <= 0) continue
+                    val titles = linkedSetOf<String>()
+                    listOf("title", "title_english", "title_japanese").forEach { key ->
+                        item.optString(key).takeIf { it.isNotBlank() && it != "null" }?.let(titles::add)
+                    }
+                    val alternatives = item.optJSONArray("titles")
+                    for (j in 0 until (alternatives?.length() ?: 0)) {
+                        alternatives?.optJSONObject(j)?.optString("title")
+                            ?.takeIf { it.isNotBlank() && it != "null" }?.let(titles::add)
+                    }
+                    add(JikanCandidate(id, titles.toList()))
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+
+private suspend fun resolveMalAnime(row: MalRow): Anime? {
+    row.malId?.let { malId ->
+        retryAniListMalId(malId)?.let { return it }
+    }
+
+    val wanted = normalizeTitle(row.title)
+    val direct = retryAniListSearch(row.title).firstOrNull { anime ->
+        (listOf(anime.title, anime.romajiTitle, anime.nativeTitle) + anime.synonyms)
+            .any { it.isNotBlank() && wanted == normalizeTitle(it) }
+    }
+    if (direct != null) return direct
+
+    // Jikan is a MAL-derived fallback. Only accept an exact title/alias match,
+    // then map by MAL ID to AniList's canonical ID before importing.
+    delay(1100)
+    val jikanMatches = JikanImportApi.search(row.title).filter { candidate ->
+        candidate.titles.any { normalizeTitle(it) == wanted }
+    }
+    for (candidate in jikanMatches) {
+        retryAniListMalId(candidate.malId)?.let { return it }
+
+        // If AniList lacks the MAL cross-reference, search Jikan's verified
+        // alternate titles and require a shared exact alias before accepting.
+        for (alias in candidate.titles) {
+            if (normalizeTitle(alias) == wanted) continue
+            val aliases = retryAniListSearch(alias)
+            val match = aliases.firstOrNull { anime ->
+                val aniTitles = (listOf(anime.title, anime.romajiTitle, anime.nativeTitle) + anime.synonyms)
+                    .filter(String::isNotBlank).map(::normalizeTitle).toSet()
+                candidate.titles.any { normalizeTitle(it) in aniTitles }
+            }
+            if (match != null) return match
+            delay(850)
+        }
+    }
+    return null
+}
+
 private fun parseMalExport(raw: String): List<MalRow> {
     if (raw.trimStart().startsWith("<")) return parseMalXml(raw)
     return parseMalCsv(raw)
@@ -149,7 +240,7 @@ private fun parseMalXml(raw: String): List<MalRow> {
     parser.setInput(StringReader(raw))
     val result = mutableListOf<MalRow>()
     var fields: MutableMap<String, String>? = null
-    val accepted = setOf("series_title", "anime_title", "title", "my_score", "my_status",
+    val accepted = setOf("series_title", "anime_title", "title", "series_animedb_id", "anime_id", "my_score", "my_status",
         "my_watched_episodes", "anime_episodes", "series_episodes")
     var event = parser.eventType
     while (event != XmlPullParser.END_DOCUMENT) {
@@ -166,7 +257,8 @@ private fun parseMalXml(raw: String): List<MalRow> {
                 if (title.isNotBlank()) result += MalRow(
                     title, item["my_score"]?.toIntOrNull() ?: 0, item["my_status"].orEmpty(),
                     item["my_watched_episodes"]?.toIntOrNull() ?: 0,
-                    (item["series_episodes"] ?: item["anime_episodes"])?.toIntOrNull()?.takeIf { it > 0 }
+                    (item["series_episodes"] ?: item["anime_episodes"])?.toIntOrNull()?.takeIf { it > 0 },
+                    (item["series_animedb_id"] ?: item["anime_id"])?.toIntOrNull()?.takeIf { it > 0 }
                 )
                 fields = null
             }
@@ -203,6 +295,7 @@ private fun parseMalCsv(raw: String): List<MalRow> {
     val headers = records.first().map { it.trim().removePrefix("\uFEFF").lowercase() }
     fun index(vararg names: String) = names.firstNotNullOfOrNull { headers.indexOf(it).takeIf { n -> n >= 0 } } ?: -1
     val titleI = index("anime_title", "title")
+    val malIdI = index("anime_id", "series_animedb_id")
     val scoreI = index("my_score")
     val statusI = index("my_status")
     val progressI = index("my_watched_episodes")
@@ -214,6 +307,7 @@ private fun parseMalCsv(raw: String): List<MalRow> {
             row.getOrNull(scoreI)?.toIntOrNull() ?: 0,
             row.getOrNull(statusI)?.trim().orEmpty(),
             row.getOrNull(progressI)?.toIntOrNull() ?: 0,
-            row.getOrNull(totalI)?.toIntOrNull()?.takeIf { it > 0 })
+            row.getOrNull(totalI)?.toIntOrNull()?.takeIf { it > 0 },
+            row.getOrNull(malIdI)?.toIntOrNull()?.takeIf { it > 0 })
     }
 }
