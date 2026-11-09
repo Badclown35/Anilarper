@@ -11,6 +11,7 @@ struct AniListClient {
               id
               idMal
               title { romaji english native }
+              synonyms
               coverImage { medium }
               episodes
               averageScore
@@ -79,6 +80,7 @@ struct AnimeSearchResult: Decodable, Identifiable {
     let id: Int
     let idMal: Int?
     let title: Titles
+    let synonyms: [String]?
     let coverImage: CoverImage?
     let episodes: Int?
     let averageScore: Int?
