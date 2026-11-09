@@ -162,6 +162,9 @@ private struct LibraryAnimeRow: View {
             .frame(width: 90)
         }
         .padding(.vertical, 5)
+        .onChange(of: library.anime) { _, items in
+            if let latest = items.first(where: { $0.id == anime.id }) { anime = latest }
+        }
     }
 }
 
