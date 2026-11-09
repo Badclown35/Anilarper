@@ -8,6 +8,7 @@ struct AnilarperApp: App {
                 .environmentObject(LibraryStore())
                 .environmentObject(ReadingStore())
                 .environmentObject(CustomListsStore())
+                .environmentObject(QuestStore())
                 .preferredColorScheme(.dark)
         }
     }
