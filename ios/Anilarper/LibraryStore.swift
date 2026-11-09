@@ -52,20 +52,24 @@ final class LibraryStore: ObservableObject {
         save()
     }
 
-    func exportData() throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try encoder.encode(anime)
+    func exportData(reading: [ReadingTitle]) throws -> Data {
+        try AnilarperBackupCodec.encode(anime: anime, reading: reading)
     }
 
-    func importData(_ data: Data) throws {
-        let imported = try JSONDecoder().decode([Anime].self, from: data)
+    func importData(_ data: Data, readingStore: ReadingStore) throws {
+        let backup = try AnilarperBackupCodec.decode(data)
+        importAnime(backup.anime)
+        readingStore.importTitles(backup.reading)
+    }
+
+    func importAnime(_ items: [Anime]) {
         var merged = Dictionary(uniqueKeysWithValues: anime.map { ($0.id, $0) })
-        for item in imported {
+        for item in items {
             if var existing = merged[item.id] {
                 existing.status = item.status
                 existing.progress = item.progress
                 existing.score = item.score ?? existing.score
+                existing.malId = item.malId ?? existing.malId
                 merged[item.id] = existing
             } else {
                 merged[item.id] = item
