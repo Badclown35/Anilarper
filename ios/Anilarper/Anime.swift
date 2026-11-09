@@ -6,6 +6,16 @@ enum AnimeStatus: String, Codable, CaseIterable {
     case completed
     case paused
     case dropped
+
+    var label: String {
+        switch self {
+        case .planning: "Planning"
+        case .watching: "Watching"
+        case .completed: "Completed"
+        case .paused: "Paused"
+        case .dropped: "Dropped"
+        }
+    }
 }
 
 struct Anime: Identifiable, Codable, Hashable {
