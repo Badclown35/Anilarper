@@ -21,6 +21,19 @@ final class LibraryStore: ObservableObject {
         save()
     }
 
+    func importAnime(_ item: Anime) {
+        if let index = anime.firstIndex(where: { $0.id == item.id }) {
+            var existing = anime[index]
+            existing.status = item.status
+            existing.progress = item.progress
+            existing.score = item.score ?? existing.score
+            anime[index] = existing
+        } else {
+            anime.append(item)
+        }
+        save()
+    }
+
     func update(_ item: Anime) {
         guard let index = anime.firstIndex(where: { $0.id == item.id }) else { return }
         anime[index] = item
