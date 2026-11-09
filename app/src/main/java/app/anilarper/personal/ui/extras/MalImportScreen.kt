@@ -39,7 +39,7 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
     var rows by remember { mutableStateOf<List<MalRow>>(emptyList()) }
     var running by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0) }
-    var diagnostics by remember { mutableStateOf<List<String>>(emptyList())
+    var diagnostics by remember { mutableStateOf<List<String>>(emptyList()) }
     var message by remember { mutableStateOf("Choose your MyAnimeList anime-list export (.xml).") }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
