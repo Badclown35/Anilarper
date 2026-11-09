@@ -355,18 +355,7 @@ object AniListReadingApi {
             connection.disconnect()
         }
     }
-}}malId: Int) {
-                Media(idMal: $malId, type: ANIME) {
-                    $FIELDS
-                }
-            }
-        """.trimIndent()
-        val media = request(gql, JSONObject().put("malId", malId))
-            .getJSONObject("data").optJSONObject("Media")
-        media?.let(::parseAnime)
-    }
-
-    suspend fun franchise(id: Int, maxTitles: Int = 80): FranchiseResult {
+suspend fun franchise(id: Int, maxTitles: Int = 80): FranchiseResult {
         val root = details(id)
         return franchise(id, root, maxTitles)
     }
