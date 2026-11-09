@@ -30,7 +30,8 @@ data class MalScrapedData(
     val rank: String,
     val popularity: String,
     val members: String,
-    val favorites: String
+    val favorites: String,
+    val characters: List<MalAnimeCharacter>
 )
 
 /**
@@ -92,7 +93,17 @@ object MalPageScraper {
             rank = text("span.numbers.ranked strong"),
             popularity = field("Popularity"),
             members = field("Members"),
-            favorites = field("Favorites")
+            favorites = field("Favorites"),
+            characters = doc.select("div.detail-characters-list table").mapNotNull { table ->
+                val heading = table.selectFirst("h3.h3_characters_voice_actors a") ?: return@mapNotNull null
+                val href = heading.absUrl("href").ifBlank { heading.attr("href") }
+                val id = Regex("/character/(\\d+)").find(href)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
+                val role = table.selectFirst("h3.h3_characters_voice_actors")?.parent()?.selectFirst("small")?.text()?.trim().orEmpty()
+                val actorCell = table.selectFirst("td.va-t.ar.pl4.pr4")
+                val actor = actorCell?.selectFirst("a")?.text()?.trim().orEmpty()
+                val language = actorCell?.selectFirst("small")?.text()?.trim().orEmpty()
+                MalAnimeCharacter(id, heading.text().replace(",", "").trim(), role, actor, language, "https://myanimelist.net/character/$id")
+            }.distinctBy { it.id }.take(60)
         )
     }
 }
