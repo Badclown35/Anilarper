@@ -73,9 +73,19 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
             scope.launch {
                 var imported = 0; var skipped = 0; var errors = 0
                 val issues = mutableListOf<String>()
+                val resolvedByMalId = mutableMapOf<Int, Anime?>()
+                val resolvedByTitle = mutableMapOf<String, Anime?>()
                 rows.forEachIndexed { index, row ->
                     try {
-                        val target = resolveMalAnime(row)
+                        val cacheKey = normalizeTitle(row.title)
+                        val target = when {
+                            row.malId != null && resolvedByMalId.containsKey(row.malId) -> resolvedByMalId[row.malId]
+                            resolvedByTitle.containsKey(cacheKey) -> resolvedByTitle[cacheKey]
+                            else -> resolveMalAnime(row).also {
+                                resolvedByTitle[cacheKey] = it
+                                row.malId?.let { id -> resolvedByMalId[id] = it }
+                            }
+                        }
                         if (target == null) {
                             skipped++
                             if (issues.size < 12) issues += "Skipped: ${row.title} (no exact AniList title match)"
@@ -98,7 +108,7 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
                         if (issues.size < 12) issues += "Error: ${row.title} — ${e.message ?: e.javaClass.simpleName}"
                     }
                     progress = index + 1
-                    if (index < rows.lastIndex) delay(850)
+                    if (index < rows.lastIndex) delay(700)
                 }
                 diagnostics = issues.filter { it.startsWith("Error:") }.take(8) + issues.filter { it.startsWith("Skipped:") }.take(8)
                 running = false
@@ -125,31 +135,27 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
 
 private fun normalizeTitle(value: String) = value.lowercase().replace(Regex("[^a-z0-9]"), "")
 
-private suspend fun retryAniListSearch(title: String): List<Anime> {
-    var last: Exception? = null
-    repeat(3) { attempt ->
-        try {
-            return AniListApi.search(title, 1, AnimeFilters()).items
-        } catch (e: Exception) {
-            last = e
-            if (attempt < 2) delay(1500L * (attempt + 1))
-        }
-    }
-    throw last ?: IllegalStateException("AniList search failed")
+private fun isTransientImportError(error: Exception): Boolean {
+    val message = error.message.orEmpty().lowercase()
+    return listOf("http 429", "http 500", "http 502", "http 503", "http 504",
+        "timeout", "timed out", "connection reset", "unable to resolve host").any(message::contains)
 }
 
-private suspend fun retryAniListMalId(malId: Int): Anime? {
-    var last: Exception? = null
-    repeat(3) { attempt ->
-        try {
-            return AniListApi.findByMalId(malId)
-        } catch (e: Exception) {
-            last = e
-            if (attempt < 2) delay(1500L * (attempt + 1))
-        }
+private suspend fun <T> retryImportRequest(block: suspend () -> T): T {
+    try {
+        return block()
+    } catch (e: Exception) {
+        if (!isTransientImportError(e)) throw e
+        delay(900)
+        return block()
     }
-    throw last ?: IllegalStateException("AniList MAL-ID lookup failed")
 }
+
+private suspend fun retryAniListSearch(title: String): List<Anime> =
+    retryImportRequest { AniListApi.search(title, 1, AnimeFilters()).items }
+
+private suspend fun retryAniListMalId(malId: Int): Anime? =
+    retryImportRequest { AniListApi.findByMalId(malId) }
 
 private data class JikanCandidate(val malId: Int, val titles: List<String>)
 
