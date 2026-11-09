@@ -27,7 +27,8 @@ data class Anime(
     val studios: List<String> = emptyList(),
     val relations: List<AnimeRelation> = emptyList(),
     val romajiTitle: String = "",
-    val synonyms: List<String> = emptyList()
+    val synonyms: List<String> = emptyList(),
+    val malId: Int? = null
 )
 
 data class AnimePage(val items: List<Anime>, val page: Int, val hasNextPage: Boolean)
@@ -46,6 +47,7 @@ object AniListApi {
     private const val ENDPOINT = "https://graphql.anilist.co"
     private const val FIELDS = """
         id
+        idMal
         title { romaji english native }
         synonyms
         coverImage { large }
@@ -97,6 +99,21 @@ object AniListApi {
             AnimePage((0 until media.length()).map { parseAnime(media.getJSONObject(it)) },
                 info.optInt("currentPage", page), info.optBoolean("hasNextPage"))
         }
+
+    /** Resolve a MyAnimeList ID directly through AniList's cross-reference. */
+    suspend fun findByMalId(malId: Int): Anime? = withContext(Dispatchers.IO) {
+        if (malId <= 0) return@withContext null
+        val gql = """
+            query ($malId: Int) {
+                Media(idMal: $malId, type: ANIME) {
+                    $FIELDS
+                }
+            }
+        """.trimIndent()
+        val media = request(gql, JSONObject().put("malId", malId))
+            .getJSONObject("data").optJSONObject("Media")
+        media?.let(::parseAnime)
+    }
 
     suspend fun franchise(id: Int, maxTitles: Int = 80): FranchiseResult {
         val root = details(id)
@@ -226,6 +243,7 @@ object AniListApi {
             id = item.optInt("id"), title = title, nativeTitle = titles.optString("native"),
             romajiTitle = titles.optString("romaji"),
             synonyms = item.optJSONArray("synonyms").toStringList(),
+            malId = item.optInt("idMal").takeIf { !item.isNull("idMal") && it > 0 },
             cover = item.optJSONObject("coverImage")?.optString("large").orEmpty(),
             format = item.optString("format", "UNKNOWN").replace('_', ' '),
             status = item.optString("status", "UNKNOWN").replace('_', ' '),
