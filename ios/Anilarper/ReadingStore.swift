@@ -25,6 +25,23 @@ final class ReadingStore: ObservableObject {
         save()
     }
 
+    func importTitles(_ imported: [ReadingTitle]) {
+        var merged = Dictionary(uniqueKeysWithValues: titles.map { ("\($0.kind.rawValue)-\($0.id)", $0) })
+        for item in imported {
+            let key = "\(item.kind.rawValue)-\(item.id)"
+            if var existing = merged[key] {
+                existing.progress = item.progress
+                existing.volumeProgress = item.volumeProgress
+                existing.readingStatus = item.readingStatus
+                merged[key] = existing
+            } else {
+                merged[key] = item
+            }
+        }
+        titles = Array(merged.values).sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        save()
+    }
+
     func remove(_ title: ReadingTitle) {
         titles.removeAll { $0.id == title.id && $0.kind == title.kind }
         save()
