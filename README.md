@@ -28,17 +28,17 @@ A personal Android anime, manga, light-novel, music, and media companion built w
 - Anime and reading collections are stored locally in Room. AniList catalog metadata and cover images are fetched from AniList.
 - Music links open their official apps/sites; Anilarper does not download or re-host those streams.
 - Local audio/video files remain in their original locations unless the user separately copies them.
-- The optional Termux media server is a separate, user-operated MP4 server. Its first version is LAN-only; do not port-forward or expose its plain HTTP listener to the public internet.
-- Community Videos expects an HTTPS server address. Remote access, invite controls, and end-to-end family/friends setup still require a secure tunnel/access configuration.
-- Only share videos and other media that you own or have permission to distribute.
-- No AniList sign-in is required for local tracking.
+- Community Videos supports a public Cloudflare R2 + Worker catalog. Public viewers can browse and stream; the admin token is required for uploads, organization, and deletion.
+- The cloud media setup targets the free R2 Standard allowance (10 GB-month) and Workers Free request allowance. These are quotas, not unlimited hosting. Public streaming can exhaust daily Worker request quotas.
+- The original Termux Python media server remains available for same-Wi-Fi use only. Do not port-forward or expose its plain HTTP listener to the public internet.
+- Only upload videos and other media that you own or have permission to distribute.
 
-## Media server
+## Media hosting
 
-See [`media-server/README.md`](media-server/README.md) for Termux setup, upload/organization instructions, API details, and security limitations.
+See [`cloudflare-media/README.md`](cloudflare-media/README.md) for the free-tier R2 Worker setup and admin uploader. See [`media-server/README.md`](media-server/README.md) for the optional LAN-only Termux server.
 
 ## Verification notes
 
 - GitHub Actions confirms that the Android project compiles; it does not replace device testing.
+- The Cloudflare Worker and admin page have syntax-validation automation; live Cloudflare deployment and video playback still require testing in the user's account.
 - Still validate audio playback/background controls, local and shared video seeking, backup/restore on a real device, navigation, and smaller-screen layouts.
-- Public family/friends streaming is not ready until HTTPS remote access and appropriate access controls are configured.
