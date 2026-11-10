@@ -96,8 +96,15 @@ fun ReadingScreen(
                             Text(title.volumeProgress.toString() + (title.volumes?.let { " / " + it } ?: "") + " volumes",
                                 color = Muted, fontSize = 10.sp)
                         }
-                        IconButton(onClick = { onRemove(title) }) {
-                            Icon(Icons.Default.Close, contentDescription = "Remove title", tint = Muted)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            if (title.sourceUrl.isNotBlank()) {
+                                IconButton(onClick = {
+                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(title.sourceUrl))) }
+                                }) { Icon(Icons.Default.OpenInNew, contentDescription = "Open ${title.provider}", tint = Violet) }
+                            }
+                            IconButton(onClick = { onRemove(title) }) {
+                                Icon(Icons.Default.Close, contentDescription = "Remove title", tint = Muted)
+                            }
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
