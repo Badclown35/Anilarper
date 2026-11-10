@@ -214,15 +214,15 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     keepScreenOn = true
-                    setControllerVisibilityListener { visibility ->
+                    setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
                         fullscreenControlsVisible = visibility == View.VISIBLE
-                    }
+                    })
                 } },
                 update = {
                     it.player = player
-                    it.setControllerVisibilityListener { visibility ->
+                    it.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
                         fullscreenControlsVisible = visibility == View.VISIBLE
-                    }
+                    })
                 },
                 modifier = Modifier.fillMaxSize()
             )
