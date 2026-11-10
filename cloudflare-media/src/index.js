@@ -247,7 +247,7 @@ async function handleApi(request, env, url) {
         id: "phone__" + name, title: cleanText(v.title, 120) || name,
         category: cleanText(v.category, 40) || "Uncategorized",
         size: Number(v.size || 0), modified: Number(v.modified || 0),
-        streamPath: "/media/phone__" + encodeURIComponent(name), provider: "phone"
+        streamPath: "/media/phone__" + name, provider: "phone"
       });
     }
     return json({ videos, storage: {
