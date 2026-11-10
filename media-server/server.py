@@ -26,7 +26,7 @@ def read_metadata():
     except (OSError, json.JSONDecodeError): return {}
 
 def clean_text(value, limit=100):
-    return re.sub(r"\\s+", " ", str(value or "")).strip()[:limit]
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
 def safe_name(value):
     name = Path(unquote(value or "")).name
