@@ -1,6 +1,6 @@
 # Anilarper public media (Backblaze B2 + Cloudflare Worker)
 
-The media API runs on a Cloudflare Worker and stores MP4 files in a **private Backblaze B2 bucket**. The Worker is the only component that holds the storage credentials. It exposes a public video catalog and byte-range streaming endpoint while keeping the B2 bucket and its keys private.
+The media API runs on a Cloudflare Worker and stores MP4 files in a **private Backblaze B2 bucket**. It can also aggregate explicitly published videos from a private-by-default phone server behind a Cloudflare Tunnel. Anilarper connects to one Worker URL and receives one merged public catalog; B2 remains available when the phone is offline.
 
 This setup does not make storage or bandwidth unlimited. Check the current Backblaze and Cloudflare usage pages before sharing the service widely. Do not enable paid add-ons or enter payment details without a parent/guardian.
 
@@ -57,10 +57,19 @@ Wrangler prints a URL similar to `https://anilarper-media-api.<your-subdomain>.w
 
 In Anilarper Community Videos, enter the Worker URL without `/admin` and tap Connect.
 
+## Optional backup-phone storage provider
+
+The Worker reads the phone server's public catalog from the HTTPS URL configured as the non-secret Worker variable `PHONE_STORAGE_URL`. Add it in Cloudflare Dashboard → Workers & Pages → `anilarper-media-worker` → Settings → Variables and Secrets, then Save and Deploy. Use the phone tunnel's HTTPS origin only (no `/admin` suffix). The Worker fetches the public catalog with a short timeout, merges published phone entries into `/api/videos`, combines storage statistics, and redirects `/media/phone__...` requests to the phone for direct byte-range streaming. Video bytes are not proxied through the Worker. If the phone is offline, B2 videos and storage remain available.
+
+The `/admin` page links to `/phone-admin`, which opens the phone's own admin page. The phone admin token is separate from the B2 Worker token. Keep both private. The phone's public API hides private uploads, and its stream endpoint independently rejects unpublished files.
+
+A Quick Tunnel URL can change when restarted; update `PHONE_STORAGE_URL` after a change. A stable named tunnel needs a Cloudflare-managed domain. Do not buy a domain or upgrade a plan just for this test.
+
 ## API
 
-- `GET /api/health` — health and storage cap.
-- `GET /api/videos` — public catalog in the format Anilarper already reads.
+- `GET /api/health` — health, storage cap, and whether phone storage is configured.
+- `GET /phone-admin` — opens the configured phone admin page.
+- `GET /api/videos` — merged public catalog in the format Anilarper already reads, with combined storage stats and provider status.
 - `GET/HEAD /media/{id}` — public MP4 stream with HTTP byte-range support.
 - `POST /api/upload/start`, `PUT /api/upload/part`, `POST /api/upload/complete`, `POST /api/upload/abort` — authenticated multipart upload.
 - `POST /api/videos/{id}/metadata` — authenticated title/category edit.
