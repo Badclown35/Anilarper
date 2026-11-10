@@ -7,7 +7,9 @@ on:
       - "cloudflare-media/**"
       - ".github/workflows/cloudflare-media.yml"
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - "ui-refresh/**"
     paths:
       - "cloudflare-media/**"
       - ".github/workflows/cloudflare-media.yml"
