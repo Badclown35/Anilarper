@@ -2,6 +2,7 @@ name = "anilarper-media-worker"
 main = "src/index.js"
 compatibility_date = "2026-11-09"
 workers_dev = true
+keep_vars = true
 
 [vars]
 B2_ENDPOINT = "https://s3.us-east-005.backblazeb2.com"
