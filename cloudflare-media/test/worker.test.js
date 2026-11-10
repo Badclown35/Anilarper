@@ -102,7 +102,7 @@ test("uploads require admin auth and public media supports byte ranges", async (
     "&uploadId=" + encodeURIComponent(session.uploadId) + "&partNumber=1", {
       method: "PUT", headers: { ...adminHeaders, "Content-Length": "3" }, body: new Uint8Array([65, 66, 67])
     }), e);
-  assert.equal(part.status, 200);
+  assert.equal(part.status, 200, await part.clone().text());
   const partData = await part.json();
 
   const completed = await worker.fetch(request("/api/upload/complete", {
