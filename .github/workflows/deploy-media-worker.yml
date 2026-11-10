@@ -1,0 +1,38 @@
+name: Deploy Anilarper media Worker
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/full-app-overhaul
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: cloudflare-media/package.json
+
+      - name: Install dependencies
+        working-directory: cloudflare-media
+        run: npm install
+
+      - name: Run Worker tests
+        working-directory: cloudflare-media
+        run: npm test
+
+      - name: Deploy Worker and admin assets
+        working-directory: cloudflare-media
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 deploy
