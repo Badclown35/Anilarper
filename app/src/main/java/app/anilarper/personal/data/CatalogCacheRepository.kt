@@ -75,6 +75,7 @@ private fun Anime.toJson(includeRelations: Boolean = true): JSONObject =
         .put("watchStatus", watchStatus).put("progress", progress).put("lastWatchedAt", lastWatchedAt)
         .put("season", season).put("seasonYear", seasonYear)
         .put("genres", JSONArray(genres)).put("studios", JSONArray(studios))
+        .put("romajiTitle", romajiTitle).put("synonyms", JSONArray(synonyms)).put("malId", malId)
         .put("relations", JSONArray().apply {
             if (includeRelations) relations.forEach { relation ->
                 put(JSONObject().put("relation", relation.relation).put("anime", relation.anime.toJson(false)))
@@ -108,7 +109,10 @@ private fun JSONObject.toAnime(): Anime {
         seasonYear = if (isNull("seasonYear")) null else optInt("seasonYear"),
         genres = (0 until genreArray.length()).mapNotNull { genreArray.optString(it).takeIf(String::isNotBlank) },
         studios = (0 until studioArray.length()).mapNotNull { studioArray.optString(it).takeIf(String::isNotBlank) },
-        relations = relations
+        relations = relations,
+        romajiTitle = optString("romajiTitle"),
+        synonyms = (0 until (optJSONArray("synonyms")?.length() ?: 0)).mapNotNull { optJSONArray("synonyms")?.optString(it)?.takeIf(String::isNotBlank) },
+        malId = if (isNull("malId")) null else optInt("malId").takeIf { it > 0 }
     )
 }
 
