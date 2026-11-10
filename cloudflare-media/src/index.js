@@ -107,6 +107,22 @@ async function writeCatalog(env, catalog) {
 function publicVideo(v) {
   return { id: v.id, title: v.title, category: v.category, size: v.size, modified: v.modified, streamPath: "/media/" + v.id };
 }
+function phoneStorageBase(env) {
+  if (!env.PHONE_STORAGE_URL) return "";
+  try {
+    const url = new URL(env.PHONE_STORAGE_URL);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) return "";
+    return url.origin + url.pathname.replace(/\/$/, "");
+  } catch (_) { return ""; }
+}
+async function fetchPhone(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    return await fetch(url, { method: "GET", headers: { "Accept": "application/json" },
+      signal: controller.signal, cf: { cacheTtl: 0, cacheEverything: false } });
+  } finally { clearTimeout(timer); }
+}
 async function streamMedia(request, env, id) {
   const catalog = await readCatalog(env);
   const video = catalog.videos.find(v => v.id === id);
@@ -201,17 +217,58 @@ async function abortMultipart(env, key, uploadId) {
 async function handleApi(request, env, url) {
   const path = url.pathname;
   if (request.method === "GET" && path === "/api/health") {
-    return json({ ok: true, service: "Anilarper B2 Media", version: 2, maxStorageBytes: MAX_STORAGE_BYTES });
+    return json({ ok: true, service: "Anilarper Community Media", version: 3,
+      maxStorageBytes: MAX_STORAGE_BYTES, phoneStorageConfigured: Boolean(phoneStorageBase(env)) });
   }
   if (request.method === "GET" && path === "/api/videos") {
     const catalog = await readCatalog(env);
-    const usedBytes = catalog.videos.reduce((sum, v) => sum + Number(v.size || 0), 0);
-    const pendingBytes = catalog.pending.reduce((sum, p) => sum + Number(p.size || 0), 0);
-    return json({ videos: catalog.videos.map(publicVideo), storage: { usedBytes, pendingBytes, maxBytes: MAX_STORAGE_BYTES } });
+    const phoneBase = phoneStorageBase(env);
+    let phone = { videos: [], storage: null, online: false };
+    if (phoneBase) {
+      try {
+        const response = await fetchPhone(phoneBase + "/api/videos");
+        if (response.ok) {
+          const data = await response.json();
+          phone = { videos: Array.isArray(data.videos) ? data.videos : [],
+            storage: data.storage || null, online: true };
+        }
+      } catch (_) { /* B2 remains available while the phone is offline. */ }
+    }
+    const b2Used = catalog.videos.reduce((sum, v) => sum + Number(v.size || 0), 0);
+    const b2Pending = catalog.pending.reduce((sum, p) => sum + Number(p.size || 0), 0);
+    const phoneUsed = phone.online ? Number(phone.storage?.usedBytes || 0) : 0;
+    const phonePending = phone.online ? Number(phone.storage?.pendingBytes || 0) : 0;
+    const phoneMax = phone.online ? Number(phone.storage?.maxBytes || 0) : 0;
+    const videos = catalog.videos.map(v => ({ ...publicVideo(v), provider: "b2" }));
+    for (const v of phone.videos) {
+      const name = String(v.id || "");
+      if (!/^[A-Za-z0-9._ -]+\.mp4$/i.test(name) || name.startsWith(".")) continue;
+      videos.push({
+        id: "phone__" + name, title: cleanText(v.title, 120) || name,
+        category: cleanText(v.category, 40) || "Uncategorized",
+        size: Number(v.size || 0), modified: Number(v.modified || 0),
+        streamPath: "/media/phone__" + encodeURIComponent(name), provider: "phone"
+      });
+    }
+    return json({ videos, storage: {
+      usedBytes: b2Used + phoneUsed, pendingBytes: b2Pending + phonePending,
+      maxBytes: MAX_STORAGE_BYTES + phoneMax,
+      providers: {
+        b2: { online: true, usedBytes: b2Used, pendingBytes: b2Pending, maxBytes: MAX_STORAGE_BYTES },
+        phone: { online: phone.online, usedBytes: phoneUsed, pendingBytes: phonePending, maxBytes: phoneMax }
+      }
+    } });
   }
   if (path.startsWith("/media/") && (request.method === "GET" || request.method === "HEAD")) {
     let id;
     try { id = decodeURIComponent(path.slice(7)); } catch (_) { return json({ error: "Invalid video ID." }, 404); }
+    if (id.startsWith("phone__")) {
+      const name = id.slice(7);
+      if (!/^[A-Za-z0-9._ -]+\.mp4$/i.test(name) || name.startsWith(".")) return json({ error: "Invalid phone video ID." }, 404);
+      const base = phoneStorageBase(env);
+      if (!base) return json({ error: "Phone storage is not configured." }, 503);
+      return respond(null, 307, { Location: base + "/media/" + encodeURIComponent(name), "Cache-Control": "no-store" });
+    }
     if (!/^[A-Za-z0-9-]+_[A-Za-z0-9._ -]+\.mp4$/i.test(id)) return json({ error: "Invalid video ID." }, 404);
     return streamMedia(request, env, id);
   }
@@ -337,6 +394,11 @@ export default {
         headers.set("X-Content-Type-Options", "nosniff");
         headers.set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:");
         return respond(asset.body, asset.status, headers);
+      }
+      if (url.pathname === "/phone-admin" && request.method === "GET") {
+        const base = phoneStorageBase(env);
+        if (!base) return json({ error: "Phone storage is not configured yet." }, 503);
+        return respond(null, 302, { Location: base + "/", "Cache-Control": "no-store" });
       }
       return await handleApi(request, env, url);
     } catch (error) {
