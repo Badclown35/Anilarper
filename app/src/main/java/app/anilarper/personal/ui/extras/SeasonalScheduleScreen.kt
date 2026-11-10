@@ -17,6 +17,8 @@ import app.anilarper.personal.AnimeFilters
 import app.anilarper.personal.AniListApi
 import app.anilarper.personal.theme.*
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -32,19 +34,28 @@ fun SeasonalScheduleScreen(
     var titles by remember { mutableStateOf<List<Anime>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var loadJob by remember { mutableStateOf<Job?>(null) }
 
     fun refresh() {
-        if (loading) return
+        loadJob?.cancel()
+        val requestedSeason = season
+        val requestedYear = year
         loading = true
         error = null
-        scope.launch {
-            runCatching {
-                AniListApi.search("", 1, AnimeFilters(season = season, seasonYear = year, sort = "POPULARITY_DESC"))
-            }.onSuccess { titles = it.items }
-                .onFailure { error = "Couldn't load this season. Check your connection and retry." }
-            loading = false
+        loadJob = scope.launch {
+            try {
+                val result = AniListApi.search("", 1, AnimeFilters(season = requestedSeason, seasonYear = requestedYear, sort = "POPULARITY_DESC"))
+                if (season == requestedSeason && year == requestedYear) titles = result.items
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (season == requestedSeason && year == requestedYear) error = "Couldn't load this season. Check your connection and retry."
+            } finally {
+                if (season == requestedSeason && year == requestedYear) loading = false
+            }
         }
     }
+    DisposableEffect(Unit) { onDispose { loadJob?.cancel() } }
     LaunchedEffect(season, year) { refresh() }
 
     Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
