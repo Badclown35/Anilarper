@@ -32,7 +32,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-private data class SharedVideo(val id: String, val title: String, val size: Long, val streamPath: String)
+private data class SharedVideo(val id: String, val title: String, val category: String, val size: Long, val streamPath: String)
 
 @Composable
 fun CommunityVideosScreen(modifier: Modifier = Modifier) {
@@ -41,6 +41,8 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
     var serverAddress by remember { mutableStateOf(prefs.getString("server_url", "") ?: "") }
     var connectedAddress by remember { mutableStateOf("") }
     var videos by remember { mutableStateOf<List<SharedVideo>>(emptyList()) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedCategory by remember { mutableStateOf("All") }
     var status by remember { mutableStateOf("Enter the secure server address to browse shared videos.") }
     var loading by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<SharedVideo?>(null) }
@@ -64,6 +66,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
                     connection.connectTimeout = 10000
                     connection.readTimeout = 15000
                     connection.requestMethod = "GET"
+                    connection.instanceFollowRedirects = false
                     try {
                         if (connection.responseCode !in 200..299) error("Server returned HTTP ${connection.responseCode}")
                         val body = connection.inputStream.bufferedReader().use { it.readText() }
@@ -75,7 +78,8 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
                                 val path = item.optString("streamPath")
                                 if (id.isNotBlank() && path.startsWith("/media/")) {
                                     add(SharedVideo(id, item.optString("title", id.removeSuffix(".mp4")),
-                                        item.optLong("size"), path))
+                                        item.optString("category", "Uncategorized").ifBlank { "Uncategorized" },
+                                        item.optLong("size").coerceAtLeast(0L), path))
                                 }
                             }
                         }
@@ -136,13 +140,43 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
             )
         }
         Text("VIDEO LIBRARY", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
+        if (videos.isNotEmpty()) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("Search shared videos") },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = White, unfocusedTextColor = White,
+                    focusedBorderColor = Violet, unfocusedBorderColor = Muted,
+                    focusedLabelColor = Violet, unfocusedLabelColor = Muted, cursorColor = Violet
+                )
+            )
+            val categories = listOf("All") + videos.map { it.category }.distinct().sorted()
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                categories.forEach { category ->
+                    FilterChip(selected = selectedCategory == category, onClick = { selectedCategory = category },
+                        label = { Text(category) },
+                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Violet.copy(alpha = .2f), selectedLabelColor = Violet, labelColor = Muted))
+                }
+            }
+        }
+        val visibleVideos = videos.filter { video ->
+            (selectedCategory == "All" || video.category == selectedCategory) &&
+                (searchQuery.isBlank() || (video.title + " " + video.id + " " + video.category).contains(searchQuery.trim(), ignoreCase = true))
+        }
         if (videos.isEmpty()) {
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 Text("Your connected server's videos will appear here.", color = Muted, fontSize = 13.sp)
             }
         } else {
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(videos, key = { it.id }) { video ->
+            if (visibleVideos.isEmpty()) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    Text("No videos match this search or category.", color = Muted, fontSize = 13.sp)
+                }
+            } else LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(visibleVideos, key = { it.id }) { video ->
                     Row(
                         Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp))
                             .clickable {
@@ -156,7 +190,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(video.title, color = White, fontWeight = FontWeight.SemiBold, maxLines = 2)
-                            Text(String.format("%.1f MB", video.size / 1048576.0), color = Muted, fontSize = 11.sp)
+                            Text(video.category + " • " + String.format("%.1f MB", video.size / 1048576.0), color = Muted, fontSize = 11.sp)
                         }
                         Text("PLAY", color = Violet, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
