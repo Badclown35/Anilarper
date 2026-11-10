@@ -31,6 +31,7 @@ import app.anilarper.personal.theme.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -77,7 +78,7 @@ fun WatchHistoryScreen(library: List<Anime>, modifier: Modifier = Modifier) {
         Text("Anime you've most recently updated.", color = Muted, fontSize = 12.sp)
         Spacer(Modifier.height(14.dp))
         if (history.isEmpty()) {
-            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(20.dp),
+            Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(18.dp)).padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Default.History, contentDescription = null, tint = Violet, modifier = Modifier.size(32.dp))
                 Text("Your history will appear here.", color = White, fontWeight = FontWeight.SemiBold)
@@ -87,10 +88,10 @@ fun WatchHistoryScreen(library: List<Anime>, modifier: Modifier = Modifier) {
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
                 items(history, key = { it.id }) { anime ->
-                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(12.dp),
+                    Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp)).padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
-                        AsyncImage(model = anime.cover, contentDescription = anime.title,
-                            modifier = Modifier.width(52.dp).height(70.dp).background(Panel2, RoundedCornerShape(8.dp)))
+                        AsyncImage(model = anime.cover, contentScale = androidx.compose.ui.layout.ContentScale.Crop, contentDescription = anime.title,
+                            modifier = Modifier.width(52.dp).height(70.dp).clip(RoundedCornerShape(8.dp)).background(Panel2))
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(anime.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
                             Text("Episode ${anime.progress}${anime.episodes?.let { " / $it" } ?: ""}",
@@ -133,7 +134,7 @@ fun StatisticsScreen(library: List<Anime>, readingLibrary: List<ReadingTitle>, m
             DashboardStat("COMPLETED", completed.toString(), Icons.Default.CheckCircle, Modifier.weight(1f))
             DashboardStat("EST. HOURS", if (estimatedHours < 1) "<1" else estimatedHours.toString(), Icons.Default.Schedule, Modifier.weight(1f))
         }
-        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
+        Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(18.dp)).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(11.dp)) {
             Text("WATCH STATUS", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
             val statuses = listOf(
@@ -158,7 +159,7 @@ fun StatisticsScreen(library: List<Anime>, readingLibrary: List<ReadingTitle>, m
                 }
             }
         }
-        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
+        Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(18.dp)).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("YOUR READING SHELF", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -169,7 +170,7 @@ fun StatisticsScreen(library: List<Anime>, readingLibrary: List<ReadingTitle>, m
                 color = Muted, fontSize = 11.sp)
         }
         if (genreCounts.isNotEmpty()) {
-            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(16.dp),
+            Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(18.dp)).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("MOST-COLLECTED GENRES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
                 genreCounts.forEach { (genre, count) ->

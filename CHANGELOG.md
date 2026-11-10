@@ -37,3 +37,11 @@ All notable changes to Anilarper are documented here.
 - Added genre-based AniList recommendations.
 - Added MyAnimeList anime CSV import with AniList ID matching, status/progress/score transfer, and a preview.
 - Fixed bottom navigation to avoid restoring an unrelated More destination.
+
+## Anime UI overhaul (2026-11-10; build/device verification pending)
+
+- New "midnight indigo" theme with sakura and aqua accents; the five profile accent colors still drive the UI. Existing palette names are unchanged so all screens inherit the new look.
+- Added shared anime-style components in `theme/AnimeUi.kt`: gradient rim-lit cards, section headers, pills, gradient progress bars, cropped poster images and a glowing backdrop.
+- Redesigned Home (hero banner, gradient episode progress, poster rail), the bottom navigation bar and the More screen (two-column tile grid).
+- Fixed cover art that was stretched or letterboxed (missing crop) in Library rows, Reading, History, Recommendations, Discover details and the profile avatar; images are now clipped to their rounded corners.
+- Themed Material dialogs/menus (surface container colors) and set app-wide shapes and typography.

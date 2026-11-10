@@ -28,7 +28,8 @@ data class Anime(
     val relations: List<AnimeRelation> = emptyList(),
     val romajiTitle: String = "",
     val synonyms: List<String> = emptyList(),
-    val malId: Int? = null
+    val malId: Int? = null,
+    val isFavorite: Boolean = false
 )
 
 data class AnimePage(val items: List<Anime>, val page: Int, val hasNextPage: Boolean)
@@ -216,7 +217,9 @@ object AniListApi {
             val response = stream.bufferedReader().use { it.readText() }
             if (code !in 200..299) {
                 val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
-                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+                val retryAfter = connection.getHeaderField("Retry-After")?.takeIf { it.isNotBlank() }
+                val detail = message?.takeIf { it.isNotBlank() } ?: "request failed"
+                error("AniList returned HTTP $code: $detail" + (retryAfter?.let { " (Retry-After: $it)" } ?: ""))
             }
             val json = JSONObject(response)
             if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
@@ -285,14 +288,17 @@ data class ReadingTitle(
     val kind: String,
     val progress: Int = 0,
     val volumeProgress: Int = 0,
-    val readingStatus: String = "PLANNING"
+    val readingStatus: String = "PLANNING",
+    val provider: String = "AniList",
+    val providerId: String = "",
+    val sourceUrl: String = ""
 )
 
 object AniListReadingApi {
     suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
         val gql = """
             query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
-                Page(perPage: 20) {
+                Page(perPage: 50) {
                     media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
                         id
                         title { romaji english native }
@@ -347,7 +353,10 @@ object AniListReadingApi {
                             .replace(Regex("<[^>]*>"), "")
                             .replace("&amp;", "&").replace("&quot;", "\"")
                             .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
-                        kind = if (novels) "NOVEL" else "MANGA"
+                        kind = if (novels) "NOVEL" else "MANGA",
+                        provider = "AniList",
+                        providerId = item.optInt("id").toString(),
+                        sourceUrl = "https://anilist.co/manga/${item.optInt("id")}"
                     ))
                 }
             }

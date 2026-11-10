@@ -15,6 +15,7 @@ import app.anilarper.personal.theme.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -61,10 +62,10 @@ fun ProfileScreen(context: Context, library: List<Anime>,
     var profile by remember { mutableStateOf(loadProfile(context)) }
     var editing by remember { mutableStateOf(false) }
     val bannerColors = listOf(
-        listOf(Color(0xFF30294F), Color(0xFF171923), Color(0xFF252039)),
-        listOf(Color(0xFF193D45), Color(0xFF171923), Color(0xFF24334A)),
-        listOf(Color(0xFF4A283D), Color(0xFF171923), Color(0xFF34253F)),
-        listOf(Color(0xFF343A45), Color(0xFF171923), Color(0xFF242B39))
+        listOf(Color(0xFF30294F), Color(0xFF131528), Color(0xFF252039)),
+        listOf(Color(0xFF193D45), Color(0xFF131528), Color(0xFF24334A)),
+        listOf(Color(0xFF4A283D), Color(0xFF131528), Color(0xFF34253F)),
+        listOf(Color(0xFF343A45), Color(0xFF131528), Color(0xFF242B39))
     )
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -75,8 +76,8 @@ fun ProfileScreen(context: Context, library: List<Anime>,
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (profile.avatarUrl.isNotBlank()) {
-                        AsyncImage(model = profile.avatarUrl, contentDescription = "Profile avatar",
-                            modifier = Modifier.size(68.dp).background(Panel2, CircleShape))
+                        AsyncImage(model = profile.avatarUrl, contentScale = androidx.compose.ui.layout.ContentScale.Crop, contentDescription = "Profile avatar",
+                            modifier = Modifier.size(68.dp).clip(CircleShape).background(Panel2))
                     } else {
                         Box(Modifier.size(68.dp).background(Panel2, CircleShape), contentAlignment = Alignment.Center) {
                             Icon(Icons.Default.Person, contentDescription = null, tint = Violet, modifier = Modifier.size(34.dp))
@@ -103,13 +104,13 @@ fun ProfileScreen(context: Context, library: List<Anime>,
             ProfileStat("Completed", library.count { it.watchStatus == "COMPLETED" }.toString(), Modifier.weight(1f))
             ProfileStat("Reading", readingLibrary.size.toString(), Modifier.weight(1f))
         }
-        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(15.dp),
+        Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(16.dp)).padding(15.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("FAVORITES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
             Text(profile.favoriteTitles.ifBlank { "Pin your favorite anime, manga, or light novels in Customize profile." },
                 color = if (profile.favoriteTitles.isBlank()) Muted else White, fontSize = 13.sp)
         }
-        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(17.dp)).padding(15.dp),
+        Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(17.dp)).padding(15.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("ACHIEVEMENT SHOWCASE", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
             val achievements = listOf(
@@ -202,7 +203,7 @@ fun ProfileScreen(context: Context, library: List<Anime>,
 
 @Composable
 private fun ProfileStat(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(modifier.background(Panel, RoundedCornerShape(14.dp)).padding(12.dp),
+    Column(modifier.animeCard(RoundedCornerShape(14.dp)).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(value, color = White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text(label, color = Muted, fontSize = 10.sp)
