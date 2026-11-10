@@ -202,7 +202,7 @@ test("phone catalog is merged and phone media redirects without proxying video b
     assert.equal(data.videos.length, 1);
     assert.equal(data.videos[0].provider, "phone");
     assert.equal(data.videos[0].id, "phone__episode 1.mp4");
-    assert.equal(data.videos[0].streamPath, "/media/phone__episode%201.mp4");
+    assert.equal(data.videos[0].streamPath, "/media/phone__episode 1.mp4");
     assert.equal(data.storage.usedBytes, 123);
     assert.equal(data.storage.providers.phone.online, true);
 
