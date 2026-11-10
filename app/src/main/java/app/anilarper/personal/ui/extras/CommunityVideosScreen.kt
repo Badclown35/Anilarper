@@ -36,7 +36,7 @@ import java.net.URL
 
 private fun isPrivateLanHost(host: String): Boolean {
     if (host == "localhost" || host.endsWith(".local", ignoreCase = true)) return true
-    val octets = host.split(".").mapNotNull(String::toIntOrNull)
+    val octets = host.split(".").mapNotNull { it.toIntOrNull() }
     if (octets.size != 4 || octets.any { it !in 0..255 }) return false
     val (a, b) = octets
     return a == 10 || a == 127 || (a == 192 && b == 168) ||
@@ -65,9 +65,13 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
     fun connect() {
         val normalized = serverAddress.trim().trimEnd('/')
         val parsedAddress = runCatching { URL(normalized) }.getOrNull()
-        val secureHttps = parsedAddress?.protocol == "https"
-        val privateLanHttp = parsedAddress?.protocol == "http" && isPrivateLanHost(parsedAddress.host)
-        if ((!secureHttps && !privateLanHttp) || parsedAddress?.host.isNullOrBlank() ||
+        if (parsedAddress == null) {
+            status = "Enter a valid server URL."
+            return
+        }
+        val secureHttps = parsedAddress.protocol == "https"
+        val privateLanHttp = parsedAddress.protocol == "http" && isPrivateLanHost(parsedAddress.host)
+        if ((!secureHttps && !privateLanHttp) || parsedAddress.host.isBlank() ||
             parsedAddress.userInfo != null || parsedAddress.query != null || parsedAddress.ref != null) {
             status = "Use HTTPS for remote servers, or HTTP only for a private LAN address (10.x, 192.168.x, 172.16–31.x, or .local)."
             return
