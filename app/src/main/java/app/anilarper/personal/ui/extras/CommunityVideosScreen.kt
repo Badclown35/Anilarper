@@ -7,6 +7,7 @@ import android.content.pm.ActivityInfo
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import android.net.Uri
+import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -71,10 +72,14 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
     var selected by remember { mutableStateOf<SharedVideo?>(null) }
     var lastWatchedId by remember { mutableStateOf(prefs.getString("last_video_id", null)) }
     var fullscreen by remember { mutableStateOf(false) }
+    var fullscreenControlsVisible by remember { mutableStateOf(true) }
     val activity = context as? Activity
     val originalOrientation = remember(activity) { activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
 
-    LaunchedEffect(fullscreen) { onFullscreenChange(fullscreen) }
+    LaunchedEffect(fullscreen) {
+        onFullscreenChange(fullscreen)
+        if (fullscreen) fullscreenControlsVisible = true
+    }
     BackHandler(enabled = fullscreen) { fullscreen = false }
     DisposableEffect(fullscreen, activity) {
         val window = activity?.window
@@ -209,11 +214,19 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     keepScreenOn = true
+                    setControllerVisibilityListener { visibility ->
+                        fullscreenControlsVisible = visibility == View.VISIBLE
+                    }
                 } },
-                update = { it.player = player },
+                update = {
+                    it.player = player
+                    it.setControllerVisibilityListener { visibility ->
+                        fullscreenControlsVisible = visibility == View.VISIBLE
+                    }
+                },
                 modifier = Modifier.fillMaxSize()
             )
-            Row(
+            if (fullscreenControlsVisible) Row(
                 modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
