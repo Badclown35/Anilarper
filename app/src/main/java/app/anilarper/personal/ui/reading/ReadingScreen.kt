@@ -15,6 +15,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
@@ -82,6 +84,7 @@ fun ReadingScreen(
                         Column(Modifier.weight(1f)) {
                             Text(title.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
                             Text(title.format + " • " + title.readingStatus, color = Violet, fontSize = 10.sp)
+                            Text("Source: " + title.provider, color = Muted, fontSize = 10.sp)
                             Text(title.progress.toString() + (title.chapters?.let { " / " + it } ?: "") + " chapters",
                                 color = Muted, fontSize = 10.sp)
                             Text(title.volumeProgress.toString() + (title.volumes?.let { " / " + it } ?: "") + " volumes",
@@ -137,7 +140,7 @@ fun ReadingScreen(
                             color = Muted, fontSize = 10.sp)
                         Text(title.volumes?.let { it.toString() + " volumes" } ?: "Volumes unknown", color = Muted, fontSize = 10.sp)
                     }
-                    IconButton(onClick = { if (!saved) onAdd(title) }, enabled = !saved) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {\n                        IconButton(onClick = { if (!saved) onAdd(title) }, enabled = !saved) {
                         Icon(if (saved) Icons.Default.CheckCircle else Icons.Default.AddCircle,
                             contentDescription = if (saved) "Saved" else "Add to reading shelf",
                             tint = if (saved) Violet else White)
