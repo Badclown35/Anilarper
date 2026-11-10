@@ -46,6 +46,12 @@ internal fun OnlineMusicDiscovery(
     var loading by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Search freely licensed audio from Wikimedia Commons, or browse YouTube Music.") }
 
+    fun openSearch(base: String) {
+        val term = query.trim().ifBlank { "anime soundtrack" }
+        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(base + Uri.encode(term)))) }
+            .onFailure { status = "Couldn't open that music service." }
+    }
+
     fun search() {
         val term = query.trim()
         if (term.isBlank()) {
@@ -150,6 +156,19 @@ internal fun OnlineMusicDiscovery(
             }
         }
         Text(status, color = Muted, fontSize = 10.sp)
+        Text("DISCOVER ON OTHER SERVICES", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = { openSearch("https://archive.org/search?query=" }, modifier = Modifier.weight(1f)) { Text("Archive.org") }
+            OutlinedButton(onClick = { openSearch("https://soundcloud.com/search/sounds?q=" }, modifier = Modifier.weight(1f)) { Text("SoundCloud") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = { openSearch("https://bandcamp.com/search?q=" }, modifier = Modifier.weight(1f)) { Text("Bandcamp") }
+            OutlinedButton(onClick = { openSearch("https://www.jamendo.com/search?q=" }, modifier = Modifier.weight(1f)) { Text("Jamendo") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = { openSearch("https://open.spotify.com/search/") }, modifier = Modifier.weight(1f)) { Text("Spotify") }
+            OutlinedButton(onClick = { openSearch("https://music.apple.com/us/search?term=" }, modifier = Modifier.weight(1f)) { Text("Apple Music") }
+        }
         if (results.isNotEmpty()) {
             Text("OPEN-LICENSE STREAMS", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
             results.forEach { result ->
