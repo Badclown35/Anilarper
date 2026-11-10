@@ -88,6 +88,23 @@ def storage_stats():
             "availableBytes": usable, "maxBytes": used + pending + usable,
             "reserveBytes": RESERVE_BYTES}
 
+UPLOADS_FILE=DATA/"upload_sessions.json"
+UPLOAD_CHUNK=4*1024*1024
+def read_uploads():
+    try:
+        x=json.loads(UPLOADS_FILE.read_text()); return x if isinstance(x,dict) else {}
+    except (OSError,json.JSONDecodeError): return {}
+def write_uploads(x):
+    fd,n=tempfile.mkstemp(prefix=".uploads-",suffix=".tmp",dir=str(DATA))
+    try:
+        with os.fdopen(fd,"w") as f: json.dump(x,f); f.flush(); os.fsync(f.fileno())
+        os.replace(n,UPLOADS_FILE)
+    finally:
+        try: os.unlink(n)
+        except FileNotFoundError: pass
+def upload_temp(uid):
+    return MEDIA/(".upload-"+uid+".part") if re.fullmatch(r"[a-f0-9]{32}",str(uid or "")) else None
+
 def video_record(path, meta):
     st = path.stat()
     item = meta.get(path.name, {})
@@ -165,6 +182,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/videos":
             videos = [v for v in self.catalog(False)]
             self.send_json(200, {"videos": videos, "storage": storage_stats()})
+            return
+        if path == "/api/upload/status":
+            if not self.require_admin(): return
+            uid=parse_qs(urlsplit(self.path).query).get("id",[""])[0]; temp=upload_temp(uid)
+            with LOCK:
+                sessions=read_uploads(); item=sessions.get(uid)
+                if temp is None or not isinstance(item,dict) or not temp.is_file(): self.send_json(404,{"error":"Session not found"}); return
+                actual=temp.stat().st_size
+                if actual>int(item["size"]): self.send_json(409,{"error":"Session inconsistent"}); return
+                item["received"]=actual; sessions[uid]=item; write_uploads(sessions)
+                self.send_json(200,{"received":actual,"size":int(item["size"])})
             return
         if path == "/api/admin/videos":
             if not self.require_admin():
@@ -297,6 +325,62 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": "Invalid metadata: " + str(exc)[:120]})
             return
+        if parsed.path == "/api/upload/init":
+            try:
+                p=self.read_body_json(); name=safe_name(p.get("name","")); size=int(p.get("size",0))
+                if size<=0 or size>MAX_UPLOAD: raise ValueError("File must be 1 byte to 5 GiB")
+                with LOCK:
+                    sessions=read_uploads(); reserved=sum(int(v.get("size",0)) for v in sessions.values() if isinstance(v,dict))
+                    if size+reserved>storage_stats()["availableBytes"]: self.send_json(507,{"error":"Not enough free storage"}); return
+                    if (MEDIA/name).exists() or (MEDIA/name).is_symlink(): self.send_json(409,{"error":"File already exists"}); return
+                    uid=secrets.token_hex(16); temp=upload_temp(uid)
+                    with temp.open("xb"): pass
+                    sessions[uid]={"name":name,"size":size,"title":clean_text(p.get("title"),120) or Path(name).stem,"category":clean_text(p.get("category"),40) or "Uncategorized","publish":p.get("publish") is True}
+                    write_uploads(sessions)
+                self.send_json(201,{"uploadId":uid,"chunkSize":UPLOAD_CHUNK,"received":0})
+            except (ValueError,OSError,TypeError) as e: self.send_json(400,{"error":str(e)[:140]})
+            return
+        if parsed.path == "/api/upload/chunk":
+            uid=parse_qs(parsed.query).get("id",[""])[0]; temp=upload_temp(uid)
+            try:
+                length=int(self.headers.get("Content-Length","0")); offset=int(self.headers.get("X-Upload-Offset","-1"))
+                if temp is None or length<=0 or length>UPLOAD_CHUNK or offset<0: raise ValueError("Invalid chunk")
+                with LOCK:
+                    sessions=read_uploads(); item=sessions.get(uid)
+                    if not isinstance(item,dict) or not temp.is_file(): self.send_json(404,{"error":"Session not found"}); return
+                    actual=temp.stat().st_size; expected=int(item["size"])
+                    if actual>expected: self.send_json(409,{"error":"Session inconsistent"}); return
+                    if offset!=actual:
+                        self.send_json(409,{"error":"Wrong offset","received":actual}); return
+                    if actual+length>expected: self.send_json(413,{"error":"Chunk exceeds file size"}); return
+                    remaining=length
+                    with temp.open("r+b") as out:
+                        out.seek(actual)
+                        while remaining:
+                            b=self.rfile.read(min(CHUNK,remaining))
+                            if not b: raise ConnectionError("Chunk ended early")
+                            out.write(b); remaining-=len(b)
+                        out.flush(); os.fsync(out.fileno())
+                    self.send_json(200,{"received":actual+length,"size":expected})
+            except (ValueError,OSError,ConnectionError) as e: self.send_json(400,{"error":str(e)[:140]})
+            return
+        if parsed.path == "/api/upload/complete":
+            try:
+                uid=str(self.read_body_json().get("uploadId","")); temp=upload_temp(uid)
+                with LOCK:
+                    sessions=read_uploads(); item=sessions.get(uid)
+                    if temp is None or not isinstance(item,dict) or not temp.is_file(): self.send_json(404,{"error":"Session not found"}); return
+                    expected=int(item["size"])
+                    if temp.stat().st_size!=expected: self.send_json(409,{"error":"Upload incomplete","received":temp.stat().st_size,"size":expected}); return
+                    name=safe_name(item["name"]); dest=MEDIA/name
+                    if dest.exists() or dest.is_symlink(): self.send_json(409,{"error":"File already exists"}); return
+                    meta=read_metadata(); meta[name]={"title":item["title"],"category":item["category"],"visibility":"private"}
+                    write_metadata(meta); temp.replace(dest)
+                    if item.get("publish"): meta[name]["visibility"]="public"; write_metadata(meta)
+                    sessions.pop(uid); write_uploads(sessions)
+                self.send_json(201,{"name":name,"size":expected,"visibility":meta[name]["visibility"]})
+            except (ValueError,OSError,TypeError) as e: self.send_json(400,{"error":str(e)[:140]})
+            return
         if parsed.path != "/api/upload":
             self.send_error(404)
             return
@@ -403,12 +487,17 @@ let del=document.createElement('button');del.textContent='Delete';del.style.marg
 li.append(document.createTextNode(' '),toggle,edit,del);ul.append(li)}
 if(!videos.length)ul.textContent='No videos uploaded yet.'}
 async function update(v,patch){let r=await fetch('/api/videos/'+encodeURIComponent(v.id)+'/metadata',{method:'POST',headers:{...headers(),'Content-Type':'application/json'},body:JSON.stringify({...v,...patch})});statusEl.textContent=r.ok?'Saved.':'Update failed.';if(r.ok)load()}
+async function api(path,opts={}){return fetch(path,{...opts,headers:{...headers(),...(opts.headers||{})}})}
 async function upload(){let fs=[...document.getElementById('files').files];if(!token.value||!fs.length){statusEl.textContent='Enter token and select MP4 files.';return}
-for(let f of fs){statusEl.textContent='Uploading '+f.name+'…';bar.hidden=false;bar.value=0;
-await new Promise(resolve=>{let x=new XMLHttpRequest(),title=document.getElementById('title').value.trim(),category=document.getElementById('category').value.trim()||'Uncategorized',publish=document.getElementById('publish').checked;
-x.open('POST','/api/upload?name='+encodeURIComponent(f.name)+'&title='+encodeURIComponent(title||f.name.replace(/\.mp4$/i,''))+'&category='+encodeURIComponent(category)+'&publish='+publish);x.setRequestHeader('Authorization','Bearer '+token.value);x.upload.onprogress=e=>{if(e.lengthComputable)bar.value=e.loaded/e.total*100};x.onload=()=>{statusEl.textContent=x.status===201?'Uploaded '+f.name+' ('+JSON.parse(x.responseText).visibility+')':x.responseText;resolve()};x.onerror=()=>{statusEl.textContent='Network error: '+f.name;resolve()};x.send(f)})}
-document.getElementById('files').value='';await load()}
-</script></body></html>"""
+for(let f of fs){try{statusEl.textContent='Preparing '+f.name+'…';bar.hidden=false;bar.value=0;
+let r=await api('/api/upload/init',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.name,size:f.size,title:document.getElementById('title').value.trim()||f.name.replace(/\.mp4$/i,''),category:document.getElementById('category').value.trim()||'Uncategorized',publish:document.getElementById('publish').checked})}),init=await r.json();if(!r.ok)throw Error(init.error||'Init failed');
+let id=init.uploadId,offset=0,step=init.chunkSize;
+while(offset<f.size){let chunk=f.slice(offset,Math.min(offset+step,f.size)),sent=false,err='Network error';
+for(let n=0;n<3&&!sent;n++){try{let c=await api('/api/upload/chunk?id='+id,{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Upload-Offset':String(offset)},body:chunk}),j=await c.json();if(c.ok){offset=j.received;sent=true}else if(c.status===409&&Number.isInteger(j.received)){offset=j.received;sent=true}else throw Error(j.error||'Chunk failed')}catch(e){err=e.message;let q=await api('/api/upload/status?id='+id);if(q.ok){offset=(await q.json()).received;sent=true}}}
+if(!sent)throw Error(err);bar.value=offset/f.size*100;statusEl.textContent='Uploading '+f.name+' • '+Math.round(bar.value)+'%'}
+let d=await api('/api/upload/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uploadId:id})}),j=await d.json();if(!d.ok)throw Error(j.error||'Finalize failed');statusEl.textContent='Uploaded '+f.name+' ('+j.visibility+').'
+}catch(e){statusEl.textContent='Upload failed for '+f.name+': '+e.message+'; partial data remains on the phone.';break}}
+document.getElementById('files').value='';await load()}</script></body></html>"""
 
 if __name__ == "__main__":
     print("Anilarper phone media server starting")
