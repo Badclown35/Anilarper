@@ -90,7 +90,6 @@ fun ReadingScreen(
                             Text(title.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
                             Text(title.format + " • " + title.readingStatus, color = Violet, fontSize = 10.sp)
                             Text("Source: " + title.provider, color = Muted, fontSize = 10.sp)
-                            Text("Source: " + title.provider, color = Muted, fontSize = 10.sp)
                             Text(title.progress.toString() + (title.chapters?.let { " / " + it } ?: "") + " chapters",
                                 color = Muted, fontSize = 10.sp)
                             Text(title.volumeProgress.toString() + (title.volumes?.let { " / " + it } ?: "") + " volumes",
