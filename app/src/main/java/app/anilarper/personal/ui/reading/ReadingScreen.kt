@@ -65,7 +65,8 @@ fun ReadingScreen(
                 runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://mangaplus.shueisha.co.jp/"))) }
             }) { Text("Browse official MANGA Plus catalog ↗", color = Violet, fontSize = 11.sp) }
         }
-        if (!novels) Text("Searches MangaDex, AniList and Kitsu together • up to 150 unique titles", color = Muted, fontSize = 10.sp)\n        OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(),
+        if (!novels) Text("Searches MangaDex, AniList and Kitsu together • up to 150 unique titles", color = Muted, fontSize = 10.sp)
+        OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(),
             placeholder = { Text(if (novels) "Search light novels…" else "Search manga…", color = Muted) },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Muted) },
             singleLine = true, shape = RoundedCornerShape(14.dp),
