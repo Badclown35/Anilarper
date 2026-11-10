@@ -298,7 +298,7 @@ object AniListReadingApi {
     suspend fun search(query: String, novels: Boolean): List<ReadingTitle> = withContext(Dispatchers.IO) {
         val gql = """
             query (${'$'}search: String, ${'$'}formats: [MediaFormat], ${'$'}sort: [MediaSort]) {
-                Page(perPage: 20) {
+                Page(perPage: 50) {
                     media(search: ${'$'}search, type: MANGA, format_in: ${'$'}formats, isAdult: false, sort: ${'$'}sort) {
                         id
                         title { romaji english native }
