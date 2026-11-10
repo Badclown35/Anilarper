@@ -131,7 +131,7 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, viewModel:
             } finally { if (isActive) { loading = false; loadingMore = false } }
         }
     }
-    LaunchedEffect(Unit) { if (viewModel.cache.value.items.isEmpty()) load() }
+    LaunchedEffect(Unit) { load() }
     DisposableEffect(Unit) { onDispose { loadJob?.cancel() } }
     LaunchedEffect(selectedAnime?.id, franchiseRetry) {
         val selected = selectedAnime ?: return@LaunchedEffect
