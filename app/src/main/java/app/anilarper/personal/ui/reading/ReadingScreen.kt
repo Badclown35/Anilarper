@@ -85,6 +85,7 @@ fun ReadingScreen(
                             Text(title.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
                             Text(title.format + " • " + title.readingStatus, color = Violet, fontSize = 10.sp)
                             Text("Source: " + title.provider, color = Muted, fontSize = 10.sp)
+                            Text("Source: " + title.provider, color = Muted, fontSize = 10.sp)
                             Text(title.progress.toString() + (title.chapters?.let { " / " + it } ?: "") + " chapters",
                                 color = Muted, fontSize = 10.sp)
                             Text(title.volumeProgress.toString() + (title.volumes?.let { " / " + it } ?: "") + " volumes",
@@ -128,7 +129,7 @@ fun ReadingScreen(
                 CircularProgressIndicator(color = Violet)
             } }
             error?.let { message -> item { Text(message, color = Muted, fontSize = 12.sp) } }
-            items(results, key = { "result-" + it.kind + "-" + it.id }) { title ->
+            items(results, key = { "result-" + it.provider + "-" + it.providerId.ifBlank { it.id.toString() } }) { title ->
                 val saved = library.any { it.id == title.id && it.kind == title.kind }
                 Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(13.dp)).padding(10.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -139,11 +140,21 @@ fun ReadingScreen(
                         Text(title.format + " • " + (title.chapters?.let { it.toString() + " chapters" } ?: "Chapter count unknown"),
                             color = Muted, fontSize = 10.sp)
                         Text(title.volumes?.let { it.toString() + " volumes" } ?: "Volumes unknown", color = Muted, fontSize = 10.sp)
+                        Text("SOURCE • " + title.provider, color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {\n                        IconButton(onClick = { if (!saved) onAdd(title) }, enabled = !saved) {
-                        Icon(if (saved) Icons.Default.CheckCircle else Icons.Default.AddCircle,
-                            contentDescription = if (saved) "Saved" else "Add to reading shelf",
-                            tint = if (saved) Violet else White)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        IconButton(onClick = { if (!saved) onAdd(title) }, enabled = !saved) {
+                            Icon(if (saved) Icons.Default.CheckCircle else Icons.Default.AddCircle,
+                                contentDescription = if (saved) "Saved" else "Add to reading shelf",
+                                tint = if (saved) Violet else White)
+                        }
+                        if (title.sourceUrl.isNotBlank()) {
+                            IconButton(onClick = {
+                                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(title.sourceUrl))) }
+                            }) {
+                                Icon(Icons.Default.OpenInNew, contentDescription = "Open ${title.provider}", tint = Violet)
+                            }
+                        }
                     }
                 }
             }
