@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -122,7 +123,7 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
             diagnostics.forEach { Text(it, color = Muted, fontSize = 10.sp) }
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
-            items(rows.take(100), key = { it.title }) { row ->
+            itemsIndexed(rows.take(100), key = { index, _ -> index }) { _, row ->
                 Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp)).padding(10.dp)) {
                     Text(row.title, color = White, fontSize = 12.sp, modifier = Modifier.weight(1f))
                     Text("${row.progress}/${row.total ?: "?"} • ${row.status}", color = Muted, fontSize = 10.sp)
