@@ -53,7 +53,7 @@ fun LocalVideoPlayerScreen(modifier: Modifier = Modifier) {
             Spacer(Modifier.width(7.dp))
             Text("Choose video")
         }
-        Box(Modifier.fillMaxWidth().weight(1f).background(Panel, RoundedCornerShape(16.dp)),
+        Box(Modifier.fillMaxWidth().weight(1f).animeCard(RoundedCornerShape(16.dp)),
             contentAlignment = Alignment.Center) {
             if (selectedUri != null) {
                 AndroidView(factory = { PlayerView(it).apply { this.player = player; useController = true } },

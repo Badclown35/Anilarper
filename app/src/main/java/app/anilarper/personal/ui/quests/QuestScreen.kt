@@ -60,7 +60,7 @@ fun QuestScreen(context: Context, library: List<Anime>,
         quests.forEach { quest ->
             val done = quest.progress >= quest.target
             val isClaimed = claimed.contains(quest.id)
-            Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp)).padding(14.dp),
+            Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(16.dp)).padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {

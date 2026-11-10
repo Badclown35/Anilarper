@@ -1,45 +1,54 @@
-# Anilarper Home Media Server
+# Anilarper phone storage server
 
-A small MP4 library server for Android/Termux. It uses Python's standard library and stores uploaded files in a `media/` folder beside `server.py`.
+This Termux server adds the backup phone as a second media provider. It is designed to sit behind a Cloudflare Tunnel; it binds to **127.0.0.1** by default, so it is not exposed directly to the Wi-Fi or public internet.
 
-## Start on the REVVL 8
+## Storage and privacy model
 
-1. Install Termux from its official F-Droid or GitHub distribution.
-2. Run `pkg update && pkg install python curl`.
-3. Run `mkdir -p ~/anilarper-media && cd ~/anilarper-media`.
-4. Download the current `media-server/server.py` from this repository into this folder.
-5. Run `python -m py_compile server.py` to check syntax.
-6. Run `python server.py`. The first start creates `.admin_token`; keep it private.
-7. Find the REVVL's Wi-Fi IP in Android Wi-Fi details. From another device on the same Wi-Fi, open `http://PHONE_IP:8765`.
-8. Enter the admin token, choose MP4 files, set a display title and category, then upload.
+- Media is stored outside the Git checkout in `~/anilarper-storage/media` by default.
+- The admin token is created in `~/anilarper-storage/.admin_token`, with owner-only file permissions. The server never prints the token.
+- New uploads are **private by default**. Only an upload explicitly marked for publishing, or later switched to Public in the admin page, appears in `GET /api/videos`.
+- Private files are omitted from the public catalog and cannot be streamed, even if someone guesses their filename.
+- All admin routes require `Authorization: Bearer ADMIN_TOKEN`.
+- The server keeps a 512 MiB free-space reserve and rejects uploads that would consume it. Available capacity is recalculated from the phone's filesystem; it is not a guaranteed fixed quota.
+- Only MP4 files are accepted. Maximum individual upload size is 5 GiB.
 
-Keep the Termux session running while the server is in use. Android battery optimization, Wi-Fi sleep, and the phone being offline can interrupt service.
+## Run on the backup phone
 
-## Organizing videos
+In Termux:
 
-- Upload multiple MP4 files in one session.
-- Set a display title and category before upload.
-- Search the library and filter by category.
-- Use **Organize** beside a video to change its title or category later.
-- Use **Delete** to remove a video from the server. Deletion cannot be undone.
-- Original filenames are retained as video IDs; display titles/categories are metadata stored in `video_metadata.json`.
-- Existing filenames are not overwritten. Rename the source file before uploading if you need a different stored filename.
+```sh
+pkg update
+pkg install python cloudflared
+mkdir -p ~/anilarper-storage/media
+cd ~/anilarper-storage/anilarper-repo
+python -m py_compile media-server/server.py
+ANILARPER_DATA_DIR="$HOME/anilarper-storage" ANILARPER_MEDIA_DIR="$HOME/anilarper-storage/media" python media-server/server.py
+```
+
+Keep this Termux session open. In another Termux session, a temporary Cloudflare test tunnel can point to the local-only server:
+
+```sh
+cloudflared tunnel --url http://127.0.0.1:8765
+```
+
+Cloudflare prints a temporary `trycloudflare.com` URL. Do not paste the admin token into chat. The temporary URL can change after restarting the tunnel. Do not run the tunnel until the server security and Worker integration are reviewed and the user is ready to test.
+
+Open the tunnel URL in a browser to use the private admin page. Enter the token locally from the token file. Do not share the admin URL or token.
 
 ## API
 
-- `GET /api/health` — health check.
-- `GET /api/videos` — read-only catalog with title, category, size, and stream path.
-- `GET` or `HEAD /media/FILENAME.mp4` — MP4 stream with byte-range support for seeking.
-- `POST /api/upload?name=FILENAME.mp4&title=TITLE&category=CATEGORY` — raw MP4 body with `Authorization: Bearer ADMIN_TOKEN`.
-- `POST /api/videos/FILENAME.mp4/metadata` — update title/category with the admin token and a JSON body.
-- `DELETE /api/videos/FILENAME.mp4` — protected deletion with the admin token.
+- `GET /api/health` — health and live storage capacity.
+- `GET /api/videos` — public-only catalog and storage stats.
+- `GET/HEAD /media/FILENAME.mp4` — published MP4 stream with byte-range support.
+- `GET /api/admin/videos` — all files; admin token required.
+- `POST /api/upload?name=...&title=...&category=...&publish=false` — MP4 upload; admin token required. Publishing must be explicitly set to true.
+- `POST /api/videos/FILENAME.mp4/metadata` — update title/category/visibility; admin token required.
+- `DELETE /api/videos/FILENAME.mp4` — protected deletion.
 
-Uploads are limited to 5 GiB per file. Metadata requests are limited to 4 KiB.
+## Android background reliability
 
-## Security and reliability
+Use Android's app battery settings to allow Termux unrestricted battery use, keep the phone powered, and keep the server session running. A wake lock can help, but Android may still stop background work or the phone may lose internet. Phone storage is therefore an additional provider, not a replacement for the existing Backblaze B2 storage.
 
-This is a LAN prototype. It uses plain HTTP, and the video catalog/stream endpoints are readable by anyone who can reach the server on that network. The admin token protects upload, organization, and deletion only.
+## Safety
 
-**Do not port-forward this server or expose its plain HTTP listener directly to the public internet.** Before friends/family can use it remotely, add a secure HTTPS tunnel and a suitable access-control layer (for example, an invite-only private network or authenticated edge access). The Android app intentionally accepts HTTPS server addresses only.
-
-Home upload speed, router/ISP restrictions, Android battery management, and ISP terms can limit streaming. Only distribute media you own or have permission to share.
+Never port-forward this server or bind it to `0.0.0.0` for public hosting. Use the Cloudflare Tunnel to the loopback listener only. Keep the admin token private and only distribute media you own or have permission to share.

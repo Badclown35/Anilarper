@@ -81,7 +81,8 @@ class LibraryRepository(context: Context) {
         o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0), o.optLong("lastWatchedAt", 0L),
         o.optString("season"),
         if (!o.has("seasonYear") || o.isNull("seasonYear")) null else o.optInt("seasonYear"),
-        o.optJSONArray("genres").toStrings(), o.optJSONArray("studios").toStrings()
+        o.optJSONArray("genres").toStrings(), o.optJSONArray("studios").toStrings(),
+        isFavorite = o.optBoolean("isFavorite", false)
     )
 
     private fun parseReading(o: JSONObject) = ReadingTitle(
@@ -90,7 +91,8 @@ class LibraryRepository(context: Context) {
         if (o.isNull("chapters")) null else o.optInt("chapters"),
         if (o.isNull("volumes")) null else o.optInt("volumes"), o.optString("description"),
         o.optString("kind", "MANGA"), o.optInt("progress"), o.optInt("volumeProgress"),
-        o.optString("readingStatus", "PLANNING")
+        o.optString("readingStatus", "PLANNING"), o.optString("provider", "AniList"),
+        o.optString("providerId"), o.optString("sourceUrl")
     )
 
     private fun Anime.toJson() = JSONObject()
@@ -100,13 +102,15 @@ class LibraryRepository(context: Context) {
         .put("watchStatus", watchStatus).put("progress", progress).put("lastWatchedAt", lastWatchedAt)
         .put("season", season).put("seasonYear", seasonYear)
         .put("genres", JSONArray(genres)).put("studios", JSONArray(studios))
+        .put("isFavorite", isFavorite)
 
     private fun ReadingTitle.toJson() = JSONObject()
         .put("id", id).put("title", title).put("nativeTitle", nativeTitle)
         .put("cover", cover).put("format", format).put("status", status)
         .put("chapters", chapters).put("volumes", volumes).put("description", description)
         .put("kind", kind).put("progress", progress).put("volumeProgress", volumeProgress)
-        .put("readingStatus", readingStatus)
+        .put("readingStatus", readingStatus).put("provider", provider)
+        .put("providerId", providerId).put("sourceUrl", sourceUrl)
 
     fun loadAnime(): List<Anime> = readArray("library")?.mapNotNull { o ->
         runCatching {
@@ -118,7 +122,8 @@ class LibraryRepository(context: Context) {
                 o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0), o.optLong("lastWatchedAt", 0L),
                 o.optString("season"),
                 if (!o.has("seasonYear") || o.isNull("seasonYear")) null else o.optInt("seasonYear"),
-                o.optJSONArray("genres").toStrings(), o.optJSONArray("studios").toStrings()
+                o.optJSONArray("genres").toStrings(), o.optJSONArray("studios").toStrings(),
+                isFavorite = o.optBoolean("isFavorite", false)
             )
         }.getOrNull()
     } ?: emptyList()
@@ -133,7 +138,7 @@ class LibraryRepository(context: Context) {
                 .put("watchStatus", anime.watchStatus).put("progress", anime.progress)
                 .put("lastWatchedAt", anime.lastWatchedAt).put("season", anime.season)
                 .put("seasonYear", anime.seasonYear).put("genres", JSONArray(anime.genres))
-                .put("studios", JSONArray(anime.studios)))
+                .put("studios", JSONArray(anime.studios)).put("isFavorite", anime.isFavorite))
         }
         check(preferences.edit().putString("library", array.toString()).commit()) {
             "Couldn't save anime library."
@@ -148,7 +153,8 @@ class LibraryRepository(context: Context) {
                 if (o.isNull("chapters")) null else o.optInt("chapters"),
                 if (o.isNull("volumes")) null else o.optInt("volumes"), o.optString("description"),
                 o.optString("kind", "MANGA"), o.optInt("progress"), o.optInt("volumeProgress"),
-                o.optString("readingStatus", "PLANNING")
+                o.optString("readingStatus", "PLANNING"), o.optString("provider", "AniList"),
+                o.optString("providerId"), o.optString("sourceUrl")
             )
         }.getOrNull()
     } ?: emptyList()
@@ -162,7 +168,8 @@ class LibraryRepository(context: Context) {
                 .put("chapters", item.chapters).put("volumes", item.volumes)
                 .put("description", item.description).put("kind", item.kind)
                 .put("progress", item.progress).put("volumeProgress", item.volumeProgress)
-                .put("readingStatus", item.readingStatus))
+                .put("readingStatus", item.readingStatus).put("provider", item.provider)
+                .put("providerId", item.providerId).put("sourceUrl", item.sourceUrl))
         }
         check(preferences.edit().putString("readingLibrary", array.toString()).commit()) {
             "Couldn't save reading library."

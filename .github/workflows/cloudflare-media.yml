@@ -1,0 +1,49 @@
+name: Validate Cloudflare media Worker
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "cloudflare-media/**"
+      - ".github/workflows/cloudflare-media.yml"
+  push:
+    branches:
+      - main
+      - "ui-refresh/**"
+    paths:
+      - "cloudflare-media/**"
+      - ".github/workflows/cloudflare-media.yml"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Worker dependencies
+        working-directory: cloudflare-media
+        run: npm install --no-audit --no-fund
+      - name: Run Worker API tests
+        working-directory: cloudflare-media
+        run: npm test
+      - name: Validate Wrangler configuration and bundle
+        working-directory: cloudflare-media
+        run: npx --yes wrangler@4 deploy --dry-run --outdir /tmp/anilarper-worker-dry-run
+      - name: Check Worker JavaScript syntax
+        working-directory: cloudflare-media
+        run: npm run check
+      - name: Check admin page JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html = Path("cloudflare-media/public/admin.html").read_text()
+          scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+          if len(scripts) != 1:
+              raise SystemExit("Expected exactly one inline admin script")
+          Path("/tmp/anilarper-admin.js").write_text(scripts[0])
+          PY
+          node --check /tmp/anilarper-admin.js

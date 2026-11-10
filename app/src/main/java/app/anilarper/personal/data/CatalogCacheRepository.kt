@@ -123,6 +123,7 @@ private fun ReadingTitle.toJson(): JSONObject =
         .put("chapters", chapters).put("volumes", volumes).put("description", description)
         .put("kind", kind).put("progress", progress).put("volumeProgress", volumeProgress)
         .put("readingStatus", readingStatus)
+        .put("provider", provider).put("providerId", providerId).put("sourceUrl", sourceUrl)
 
 private fun JSONObject.toReadingTitle() = ReadingTitle(
     id = getInt("id"),
@@ -137,5 +138,8 @@ private fun JSONObject.toReadingTitle() = ReadingTitle(
     kind = optString("kind", "MANGA"),
     progress = optInt("progress"),
     volumeProgress = optInt("volumeProgress"),
-    readingStatus = optString("readingStatus", "PLANNING")
+    readingStatus = optString("readingStatus", "PLANNING"),
+    provider = optString("provider", "AniList"),
+    providerId = optString("providerId"),
+    sourceUrl = optString("sourceUrl")
 )

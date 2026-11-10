@@ -16,7 +16,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -62,6 +66,7 @@ private fun AnilarperApp() {
     val context = LocalContext.current
     val navController = rememberNavController()
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route ?: "Home"
+    var communityVideoFullscreen by remember { mutableStateOf(false) }
     val activity = context as ComponentActivity
     val collectionFactory = remember(context) { CollectionViewModelFactory(context.applicationContext) }
     val animeViewModel = remember(activity) {
@@ -83,10 +88,21 @@ private fun AnilarperApp() {
         VioletState.value = AccentPalette[accent.coerceIn(0, AccentPalette.lastIndex)]
     }
     AnilarperTheme {
+        AnimeBackdrop {
         Scaffold(
-            containerColor = Ink,
+            modifier = Modifier.fillMaxSize(),
+            containerColor = Color.Transparent,
             bottomBar = {
-                NavigationBar(containerColor = Color(0xFF11131B), tonalElevation = 0.dp) {
+                if (!communityVideoFullscreen) NavigationBar(
+                    containerColor = Ink.copy(alpha = .98f),
+                    tonalElevation = 0.dp,
+                    modifier = Modifier.drawBehind {
+                        drawLine(
+                            Brush.horizontalGradient(listOf(Color.Transparent, Violet.copy(alpha = .7f), Sakura.copy(alpha = .6f), Color.Transparent)),
+                            Offset(0f, 0f), Offset(size.width, 0f), strokeWidth = 2f
+                        )
+                    }
+                ) {
                     listOf("Home" to Icons.Default.Home, "Discover" to Icons.Default.Explore,
                         "Library" to Icons.Default.Bookmarks, "Read" to Icons.Default.MenuBook,
                         "More" to Icons.Default.MoreHoriz).forEach { (label, icon) ->
@@ -111,16 +127,16 @@ private fun AnilarperApp() {
                             alwaysShowLabel = true,
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = Violet, selectedTextColor = Violet,
-                                indicatorColor = Violet.copy(alpha = .14f),
-                                unselectedIconColor = Color(0xFF777B8D),
-                                unselectedTextColor = Color(0xFF777B8D)
+                                indicatorColor = Violet.copy(alpha = .15f),
+                                unselectedIconColor = Muted,
+                                unselectedTextColor = Muted
                             )
                         )
                     }
                 }
             }
         ) { padding ->
-            NavHost(navController = navController, startDestination = "Home", modifier = Modifier.padding(padding)) {
+            NavHost(navController = navController, startDestination = "Home", modifier = if (communityVideoFullscreen) Modifier.fillMaxSize() else Modifier.padding(padding)) {
                 composable("Home") {
                     HomeScreen(Modifier.fillMaxSize(), library,
                         onDiscover = { navController.navigate("Discover") { launchSingleTop = true } },
@@ -141,7 +157,7 @@ private fun AnilarperApp() {
                 composable("MALImport") { MalImportScreen({ animeViewModel.importAnime(it) }, Modifier.fillMaxSize()) }
                 composable("Schedule") { SeasonalScheduleScreen({ animeViewModel.toggle(it) }, library.map { it.id }.toSet(), Modifier.fillMaxSize()) }
                 composable("VideoPlayer") { LocalVideoPlayerScreen(Modifier.fillMaxSize()) }
-                composable("CommunityVideos") { CommunityVideosScreen(Modifier.fillMaxSize()) }
+                composable("CommunityVideos") { CommunityVideosScreen(Modifier.fillMaxSize(), onFullscreenChange = { communityVideoFullscreen = it }) }
                 composable("Library") {
                     LibraryScreen(Modifier.fillMaxSize(), library,
                         onRemove = { animeViewModel.remove(it) },
@@ -169,53 +185,86 @@ private fun AnilarperApp() {
                 composable("Profile") { ProfileScreen(context, library, readingLibrary, Modifier.fillMaxSize()) }
             }
         }
+        }
     }
 }
 
 @Composable
 private fun MoreScreen(onNavigate: (String) -> Unit) {
-    val entries = listOf(
-        Triple("Read", "Manga & light novels", Icons.Default.MenuBook),
-        Triple("Music", "Soundtracks and local tracks", Icons.Default.LibraryMusic),
-        Triple("Quests", "Milestones & XP", Icons.Default.EmojiEvents),
-        Triple("Stats", "Anime and reading activity", Icons.Default.Insights),
-        Triple("History", "Recently updated episodes", Icons.Default.History),
-        Triple("Backup", "Export or restore your collection", Icons.Default.Backup),
-        Triple("Profile", "Personalize your profile", Icons.Default.Person),
-        Triple("CustomLists", "Create and manage anime collections", Icons.Default.Bookmarks),
-        Triple("Recommendations", "Discover anime based on your library", Icons.Default.AutoAwesome),
-        Triple("MALImport", "Import your MyAnimeList anime CSV", Icons.Default.FileDownload),
-        Triple("Schedule", "Browse anime by season and year", Icons.Default.CalendarMonth),
-        Triple("VideoPlayer", "Play video files from your device", Icons.Default.VideoLibrary),
-        Triple("CommunityVideos", "Browse videos shared from the community server", Icons.Default.Cloud)
+    val groups = listOf(
+        "DISCOVER & COLLECT" to listOf(
+            Triple("Recommendations", "Discover anime based on your library", Icons.Default.AutoAwesome),
+            Triple("Schedule", "Browse anime by season and year", Icons.Default.CalendarMonth),
+            Triple("CustomLists", "Create and manage anime collections", Icons.Default.Bookmarks),
+            Triple("MALImport", "Import your MyAnimeList anime CSV", Icons.Default.FileDownload)
+        ),
+        "READ & LISTEN" to listOf(
+            Triple("Read", "Manga and light novels", Icons.Default.MenuBook),
+            Triple("Music", "Soundtracks and local tracks", Icons.Default.LibraryMusic)
+        ),
+        "WATCH & SHARE" to listOf(
+            Triple("VideoPlayer", "Play video files from your device", Icons.Default.VideoLibrary),
+            Triple("CommunityVideos", "Browse your community media library", Icons.Default.Cloud)
+        ),
+        "YOUR ACTIVITY" to listOf(
+            Triple("Quests", "Milestones and XP", Icons.Default.EmojiEvents),
+            Triple("Stats", "Anime and reading statistics", Icons.Default.Insights),
+            Triple("History", "Recently updated episodes", Icons.Default.History)
+        ),
+        "ACCOUNT & DATA" to listOf(
+            Triple("Profile", "Personalize your profile", Icons.Default.Person),
+            Triple("Backup", "Export or restore your collection", Icons.Default.Backup)
+        )
     )
     Column(
-        Modifier.fillMaxSize().background(Ink).verticalScroll(rememberScrollState())
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 18.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-        Text("MORE", color = Violet, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Text("Your tools & extras", color = White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-        Text("Everything beyond your main library.", color = Muted, fontSize = 13.sp)
-        Spacer(Modifier.height(6.dp))
-        entries.forEach { (route, subtitle, icon) ->
-            Row(
-                Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp))
-                    .clickable { onNavigate(route) }.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Box(Modifier.size(42.dp).background(Violet.copy(alpha = .13f), RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center) {
-                    Icon(icon, contentDescription = null, tint = Violet)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("ANILARPER", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.5.sp)
+            Text("Your space.", color = White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+            Text("Everything in one place, neatly organized.", color = Muted, fontSize = 12.sp)
+        }
+        groups.forEach { (heading, entries) ->
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text(heading, color = Violet, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.2.sp)
+                entries.chunked(2).forEach { pair ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        pair.forEach { (route, subtitle, icon) ->
+                            MoreTile(route, subtitle, icon, Modifier.weight(1f)) { onNavigate(route) }
+                        }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    }
                 }
-                Column(Modifier.weight(1f)) {
-                    Text(if (route == "MALImport") "MAL Import" else route, color = White, fontWeight = FontWeight.SemiBold)
-                    Text(subtitle, color = Muted, fontSize = 12.sp)
-                }
-                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
             }
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun MoreTile(route: String, subtitle: String, icon: ImageVector, modifier: Modifier, onClick: () -> Unit) {
+    val label = when (route) {
+        "MALImport" -> "MAL Import"
+        "CustomLists" -> "Custom lists"
+        "VideoPlayer" -> "Video player"
+        "CommunityVideos" -> "Community videos"
+        else -> route
+    }
+    Column(
+        modifier.height(138.dp).animeCard(RoundedCornerShape(20.dp)).clickable(onClick = onClick).padding(14.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Box(
+            Modifier.size(42.dp).background(
+                Brush.linearGradient(listOf(Violet.copy(alpha = .35f), Sakura.copy(alpha = .2f))), RoundedCornerShape(14.dp)
+            ),
+            contentAlignment = Alignment.Center
+        ) { Icon(icon, contentDescription = null, tint = Violet) }
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(label, color = White, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1)
+            Text(subtitle, color = Muted, fontSize = 11.sp, lineHeight = 14.sp, maxLines = 3)
+        }
     }
 }

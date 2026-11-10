@@ -32,6 +32,10 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.io.ByteArrayInputStream
+import java.text.Normalizer
+import java.util.Locale
+import java.util.zip.GZIPInputStream
 
 private data class MalRow(val title: String, val score: Int, val status: String, val progress: Int, val total: Int?, val malId: Int? = null)
 private data class MalImportResult(val imported: Int, val skipped: Int, val errors: Int)
@@ -50,8 +54,15 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
         if (uri != null) scope.launch {
             val parsed = runCatching {
                 withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { parseMalExport(it.readText()) }
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                         ?: error("Couldn't read that file.")
+                    // MAL's official export is often delivered as .xml.gz. Accept the
+                    // compressed file directly as well as an already extracted XML.
+                    val xmlBytes = if (bytes.size >= 2 &&
+                        bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
+                        GZIPInputStream(ByteArrayInputStream(bytes)).use { it.readBytes() }
+                    } else bytes
+                    parseMalExport(xmlBytes.toString(Charsets.UTF_8))
                 }
             }
             parsed.onSuccess { rows = it; message = "${it.size} entries ready. Import resolves titles against AniList." }
@@ -63,7 +74,7 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
         Text("MAL import", color = White, fontSize = 27.sp, fontWeight = FontWeight.ExtraBold)
         Text("Import your MyAnimeList XML export; titles are matched to AniList IDs.", color = Muted, fontSize = 12.sp)
         Spacer(Modifier.height(12.dp))
-        Button(onClick = { picker.launch(arrayOf("application/xml", "text/xml", "text/*")) }, enabled = !running,
+        Button(onClick = { picker.launch(arrayOf("application/xml", "text/xml", "text/*", "application/gzip", "application/x-gzip", "application/octet-stream")) }, enabled = !running,
             colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = Ink)) {
             Icon(Icons.Default.FileOpen, contentDescription = null); Text("Choose MAL XML")
         }
@@ -79,6 +90,12 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
                 rows.forEachIndexed { index, row ->
                     try {
                         val cacheKey = normalizeTitle(row.title)
+                        if (cacheKey.isBlank()) {
+                            skipped++
+                            if (issues.size < 12) issues += "Skipped: ${row.title} (title has no searchable characters)"
+                            progress = index + 1
+                            return@forEachIndexed
+                        }
                         val target = when {
                             row.malId != null && resolvedByMalId.containsKey(row.malId) -> resolvedByMalId[row.malId]
                             resolvedByTitle.containsKey(cacheKey) -> resolvedByTitle[cacheKey]
@@ -109,7 +126,7 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
                         if (issues.size < 12) issues += "Error: ${row.title} — ${e.message ?: e.javaClass.simpleName}"
                     }
                     progress = index + 1
-                    if (index < rows.lastIndex) delay(700)
+                    if (index < rows.lastIndex) delay(1800) // Keep the total request rate below AniList/Jikan throttling thresholds.
                 }
                 diagnostics = issues.filter { it.startsWith("Error:") }.take(8) + issues.filter { it.startsWith("Skipped:") }.take(8)
                 running = false
@@ -124,7 +141,7 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
             itemsIndexed(rows.take(100), key = { index, _ -> index }) { _, row ->
-                Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp)).padding(10.dp)) {
+                Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(10.dp)).padding(10.dp)) {
                     Text(row.title, color = White, fontSize = 12.sp, modifier = Modifier.weight(1f))
                     Text("${row.progress}/${row.total ?: "?"} • ${row.status}", color = Muted, fontSize = 10.sp)
                 }
@@ -134,22 +151,46 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-private fun normalizeTitle(value: String) = value.lowercase().replace(Regex("[^a-z0-9]"), "")
+/**
+ * Canonicalize titles without dropping non-Latin scripts. MAL and AniList frequently
+ * expose Japanese, Korean, Chinese, and accented aliases; ASCII-only normalization
+ * collapsed all of those titles to an empty cache key and caused false cache hits.
+ */
+private fun normalizeTitle(value: String): String {
+    val decomposed = Normalizer.normalize(value, Normalizer.Form.NFKD).lowercase(Locale.ROOT)
+    return buildString(decomposed.length) {
+        decomposed.forEach { ch ->
+            val type = Character.getType(ch)
+            if (type != Character.NON_SPACING_MARK.toInt() &&
+                type != Character.COMBINING_SPACING_MARK.toInt() &&
+                type != Character.ENCLOSING_MARK.toInt() &&
+                ch.isLetterOrDigit()) append(ch)
+        }
+    }
+}
 
 private fun isTransientImportError(error: Exception): Boolean {
     val message = error.message.orEmpty().lowercase()
-    return listOf("http 429", "http 500", "http 502", "http 503", "http 504",
-        "timeout", "timed out", "connection reset", "unable to resolve host").any(message::contains)
+    return listOf("429", "too many requests", "rate limit", "http 500", "http 502",
+        "http 503", "http 504", "timeout", "timed out", "connection reset",
+        "unable to resolve host", "temporarily unavailable").any(message::contains)
 }
 
 private suspend fun <T> retryImportRequest(block: suspend () -> T): T {
-    try {
-        return block()
-    } catch (e: Exception) {
-        if (!isTransientImportError(e)) throw e
-        delay(900)
-        return block()
+    var lastError: Exception? = null
+    // AniList and Jikan can throttle bursts during larger imports. Retry transient
+    // failures with increasing pauses instead of turning a temporary 429 into a
+    // permanently skipped/error entry.
+    for (attempt in 0..3) {
+        try {
+            return block()
+        } catch (e: Exception) {
+            if (!isTransientImportError(e)) throw e
+            lastError = e
+            if (attempt < 3) delay(longArrayOf(8_000L, 20_000L, 45_000L)[attempt])
+        }
     }
+    throw lastError ?: IllegalStateException("Import request failed.")
 }
 
 private suspend fun retryAniListSearch(title: String): List<Anime> =
