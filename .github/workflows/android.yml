@@ -6,6 +6,7 @@ on:
     branches: [ main ]
     paths:
       - "app/**"
+      - "media-server/**"
       - "build.gradle.kts"
       - "settings.gradle.kts"
       - "gradle.properties"
@@ -50,6 +51,9 @@ jobs:
           fi
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Validate phone media server syntax
+        run: python3 -m py_compile media-server/server.py
 
       - name: Verify runner Gradle
         run: gradle --version
