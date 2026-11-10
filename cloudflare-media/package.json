@@ -5,5 +5,8 @@
   "scripts": {
     "check": "node --input-type=module --check < src/index.js",
     "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "aws4fetch": "1.0.20"
   }
 }
