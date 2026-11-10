@@ -95,7 +95,7 @@ test("health and public catalog are available without admin credentials", async 
   const e = env();
   const health = await worker.fetch(request("/api/health"), e);
   assert.equal(health.status, 200);
-  assert.equal((await health.json()).service, "Anilarper B2 Media");
+  assert.equal((await health.json()).service, "Anilarper Community Media");
   const catalog = await worker.fetch(request("/api/videos"), e);
   assert.deepEqual((await catalog.json()).videos, []);
 });
