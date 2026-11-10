@@ -51,6 +51,13 @@ fun ReadingScreen(
     val catalogCache = remember(context) { CatalogCacheRepository(context) }
     val scope = rememberCoroutineScope()
     val chapterChecks = remember { mutableStateMapOf<String, String>() }
+    var readerGroupExpanded by rememberSaveable { mutableStateOf(true) }
+    var catalogGroupExpanded by rememberSaveable { mutableStateOf(false) }
+    var otherGroupExpanded by rememberSaveable { mutableStateOf(false) }
+    val readerResults = results.filter { it.provider.equals("MangaDex", ignoreCase = true) }
+    val catalogResults = results.filter { it.provider.equals("AniList", ignoreCase = true) || it.provider.equals("Kitsu", ignoreCase = true) }
+    val otherResults = results.filter { !it.provider.equals("MangaDex", ignoreCase = true) &&
+        !it.provider.equals("AniList", ignoreCase = true) && !it.provider.equals("Kitsu", ignoreCase = true) }
     fun search() { searchViewModel.search(query, novels, catalogCache) }
     LaunchedEffect(novels) { search() }
     val visibleSaved = library.filter { it.kind == if (novels) "NOVEL" else "MANGA" }
@@ -182,7 +189,13 @@ fun ReadingScreen(
                 CircularProgressIndicator(color = Violet)
             } }
             error?.let { message -> item { Text(message, color = Muted, fontSize = 12.sp) } }
-            items(results, key = { "result-" + it.provider + "-" + it.providerId.ifBlank { it.id.toString() } }) { title ->
+            item {
+                SourceGroupHeader("MANGA READERS", "${readerResults.size} results • MangaDex", readerGroupExpanded) {
+                    readerGroupExpanded = !readerGroupExpanded
+                }
+            }
+            if (readerGroupExpanded) {
+                items(readerResults, key = { "result-" + it.provider + "-" + it.providerId.ifBlank { it.id.toString() } }) { title ->
                 val saved = library.any { it.id == title.id && it.kind == title.kind }
                 Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(13.dp)).padding(10.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -239,8 +252,72 @@ fun ReadingScreen(
                         }
                     }
                 }
+                }
+            }
+            item {
+                SourceGroupHeader("CATALOGS & DATABASES", "${catalogResults.size} results • AniList + Kitsu", catalogGroupExpanded || novels) {
+                    catalogGroupExpanded = !catalogGroupExpanded
+                }
+            }
+            if (catalogGroupExpanded || novels) {
+                items(catalogResults, key = { "result-" + it.provider + "-" + it.providerId.ifBlank { it.id.toString() } }) { title ->
+                    CatalogResultRow(title, library, onAdd, context)
+                }
+            }
+            if (otherResults.isNotEmpty()) {
+                item {
+                    SourceGroupHeader("OTHER SOURCES", "${otherResults.size} results", otherGroupExpanded) {
+                        otherGroupExpanded = !otherGroupExpanded
+                    }
+                }
+                if (otherGroupExpanded) {
+                    items(otherResults, key = { "result-" + it.provider + "-" + it.providerId.ifBlank { it.id.toString() } }) { title ->
+                        CatalogResultRow(title, library, onAdd, context)
+                    }
+                }
             }
         }
     }
 }
 
+@Composable
+private fun SourceGroupHeader(title: String, subtitle: String, expanded: Boolean, onClick: () -> Unit) {
+    Surface(onClick = onClick, color = Panel, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Text(subtitle, color = Muted, fontSize = 10.sp)
+            }
+            Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "Collapse $title" else "Expand $title", tint = Violet)
+        }
+    }
+}
+
+@Composable
+private fun CatalogResultRow(title: ReadingTitle, library: List<ReadingTitle>, onAdd: (ReadingTitle) -> Unit, context: android.content.Context) {
+    val saved = library.any { it.id == title.id && it.kind == title.kind }
+    Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(13.dp)).padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        AsyncImage(model = title.cover, contentScale = androidx.compose.ui.layout.ContentScale.Crop, contentDescription = title.title,
+            modifier = Modifier.width(52.dp).height(70.dp).clip(RoundedCornerShape(8.dp)).background(Panel2))
+        Column(Modifier.weight(1f)) {
+            Text(title.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 2)
+            Text(title.format + " • " + (title.chapters?.let { it.toString() + " chapters" } ?: "Chapter count unknown"),
+                color = Muted, fontSize = 10.sp)
+            Text(title.volumes?.let { it.toString() + " volumes" } ?: "Volumes unknown", color = Muted, fontSize = 10.sp)
+            Text("CATALOG ONLY • " + title.provider.uppercase(), color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            IconButton(onClick = { if (!saved) onAdd(title) }, enabled = !saved) {
+                Icon(if (saved) Icons.Default.CheckCircle else Icons.Default.AddCircle,
+                    contentDescription = if (saved) "Saved" else "Add to reading shelf", tint = if (saved) Violet else White)
+            }
+            if (title.sourceUrl.isNotBlank()) {
+                IconButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(title.sourceUrl))) } }) {
+                    Icon(Icons.Default.OpenInNew, contentDescription = "Open ${title.provider}", tint = Violet)
+                }
+            }
+        }
+    }
+}
