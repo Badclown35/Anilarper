@@ -1,0 +1,42 @@
+name: Validate Anilarper media Worker
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "cloudflare-media/**"
+      - ".github/workflows/media-worker.yml"
+  push:
+    branches:
+      - main
+      - "ui-refresh/**"
+    paths:
+      - "cloudflare-media/**"
+      - ".github/workflows/media-worker.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: media-worker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare-media
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Check Worker syntax
+        run: npm run check
+      - name: Run storage and API tests
+        run: npm test
+      - name: Build Worker bundle
+        run: npx wrangler deploy --dry-run
