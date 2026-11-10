@@ -260,7 +260,7 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, viewModel:
             text = {
                 Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AsyncImage(model = shown.cover, contentDescription = shown.title,
+                    AsyncImage(model = shown.cover, contentScale = androidx.compose.ui.layout.ContentScale.Crop, contentDescription = shown.title,
                         modifier = Modifier.fillMaxWidth().height(180.dp))
                     Text(listOfNotNull(shown.format, shown.status,
                         shown.season.takeIf { it.isNotBlank() }?.lowercase()?.replaceFirstChar { it.uppercase() },
@@ -319,7 +319,7 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, viewModel:
                                     Row(
                                         Modifier.fillMaxWidth().clickable {
                                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(character.url)))
-                                        }.background(Panel, RoundedCornerShape(8.dp)).padding(9.dp),
+                                        }.animeCard(RoundedCornerShape(8.dp)).padding(9.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
@@ -383,9 +383,9 @@ fun DiscoverScreen(modifier: Modifier = Modifier, savedIds: Set<Int>, viewModel:
                         ) else graph.entries
                         orderedEntries.forEach { relation ->
                             Row(Modifier.fillMaxWidth().clickable { selectedAnime = relation.anime }
-                                .background(Panel, RoundedCornerShape(10.dp)).padding(9.dp),
+                                .animeCard(RoundedCornerShape(10.dp)).padding(9.dp),
                                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                                AsyncImage(model = relation.anime.cover, contentDescription = null,
+                                AsyncImage(model = relation.anime.cover, contentScale = androidx.compose.ui.layout.ContentScale.Crop, contentDescription = null,
                                     modifier = Modifier.size(width = 42.dp, height = 56.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(relation.anime.title, color = White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)

@@ -124,7 +124,7 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
             itemsIndexed(rows.take(100), key = { index, _ -> index }) { _, row ->
-                Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp)).padding(10.dp)) {
+                Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(10.dp)).padding(10.dp)) {
                     Text(row.title, color = White, fontSize = 12.sp, modifier = Modifier.weight(1f))
                     Text("${row.progress}/${row.total ?: "?"} • ${row.status}", color = Muted, fontSize = 10.sp)
                 }

@@ -65,7 +65,7 @@ fun CustomListsScreen(library: List<Anime>, modifier: Modifier = Modifier) {
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
             items(lists, key = { it.name }) { list ->
-                Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(15.dp)).padding(13.dp)) {
+                Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(15.dp)).padding(13.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(list.name, color = White, fontWeight = FontWeight.SemiBold)
@@ -145,9 +145,9 @@ fun RecommendationsScreen(library: List<Anime>, onAdd: (Anime) -> Unit, modifier
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
             items(results, key = { it.id }) { anime ->
-                Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     androidx.compose.foundation.layout.Box(Modifier.width(60.dp).height(84.dp)) {
-                        coil.compose.AsyncImage(model = anime.cover, contentDescription = anime.title)
+                        coil.compose.AsyncImage(model = anime.cover, contentScale = androidx.compose.ui.layout.ContentScale.Crop, contentDescription = anime.title, modifier = Modifier.fillMaxSize())
                     }
                     Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                         Text(anime.title, color = White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)

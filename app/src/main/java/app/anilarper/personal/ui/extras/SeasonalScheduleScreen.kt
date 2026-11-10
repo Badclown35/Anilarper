@@ -91,7 +91,7 @@ fun SeasonalScheduleScreen(
                 item { Text("${titles.size} popular titles · ${season.lowercase().replaceFirstChar { it.uppercase() }} ${year}",
                     color = Muted, fontSize = 11.sp) }
                 items(titles, key = { it.id }) { anime ->
-                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(15.dp)).padding(10.dp),
+                    Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(15.dp)).padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
                         AsyncImage(model = anime.cover, contentDescription = anime.title,
                             modifier = Modifier.size(64.dp, 88.dp), contentScale = androidx.compose.ui.layout.ContentScale.Crop)

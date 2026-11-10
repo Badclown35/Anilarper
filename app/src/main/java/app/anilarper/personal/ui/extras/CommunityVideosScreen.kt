@@ -182,7 +182,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
             } else LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(visibleVideos, key = { it.id }) { video ->
                     Row(
-                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp))
+                        Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp))
                             .clickable {
                                 selected = video
                                 val encodedPath = Uri.encode(video.streamPath, "/")

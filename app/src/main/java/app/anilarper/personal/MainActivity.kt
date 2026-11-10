@@ -16,7 +16,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -83,10 +87,21 @@ private fun AnilarperApp() {
         VioletState.value = AccentPalette[accent.coerceIn(0, AccentPalette.lastIndex)]
     }
     AnilarperTheme {
+        AnimeBackdrop {
         Scaffold(
-            containerColor = Ink,
+            modifier = Modifier.fillMaxSize(),
+            containerColor = Color.Transparent,
             bottomBar = {
-                NavigationBar(containerColor = Color(0xFF11131B), tonalElevation = 0.dp) {
+                NavigationBar(
+                    containerColor = Panel.copy(alpha = .96f),
+                    tonalElevation = 0.dp,
+                    modifier = Modifier.drawBehind {
+                        drawLine(
+                            Brush.horizontalGradient(listOf(Color.Transparent, Violet.copy(alpha = .7f), Sakura.copy(alpha = .6f), Color.Transparent)),
+                            Offset(0f, 0f), Offset(size.width, 0f), strokeWidth = 2f
+                        )
+                    }
+                ) {
                     listOf("Home" to Icons.Default.Home, "Discover" to Icons.Default.Explore,
                         "Library" to Icons.Default.Bookmarks, "Read" to Icons.Default.MenuBook,
                         "More" to Icons.Default.MoreHoriz).forEach { (label, icon) ->
@@ -111,9 +126,9 @@ private fun AnilarperApp() {
                             alwaysShowLabel = true,
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = Violet, selectedTextColor = Violet,
-                                indicatorColor = Violet.copy(alpha = .14f),
-                                unselectedIconColor = Color(0xFF777B8D),
-                                unselectedTextColor = Color(0xFF777B8D)
+                                indicatorColor = Violet.copy(alpha = .22f),
+                                unselectedIconColor = Muted,
+                                unselectedTextColor = Muted
                             )
                         )
                     }
@@ -169,6 +184,7 @@ private fun AnilarperApp() {
                 composable("Profile") { ProfileScreen(context, library, readingLibrary, Modifier.fillMaxSize()) }
             }
         }
+        }
     }
 }
 
@@ -190,32 +206,48 @@ private fun MoreScreen(onNavigate: (String) -> Unit) {
         Triple("CommunityVideos", "Browse videos shared from the community server", Icons.Default.Cloud)
     )
     Column(
-        Modifier.fillMaxSize().background(Ink).verticalScroll(rememberScrollState())
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 18.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("MORE", color = Violet, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Text("Your tools & extras", color = White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+        Text("MORE", color = Violet, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
+        Text("Your tools & extras", color = White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
         Text("Everything beyond your main library.", color = Muted, fontSize = 13.sp)
-        Spacer(Modifier.height(6.dp))
-        entries.forEach { (route, subtitle, icon) ->
-            Row(
-                Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp))
-                    .clickable { onNavigate(route) }.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Box(Modifier.size(42.dp).background(Violet.copy(alpha = .13f), RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center) {
-                    Icon(icon, contentDescription = null, tint = Violet)
+        Spacer(Modifier.height(4.dp))
+        entries.chunked(2).forEach { pair ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                pair.forEach { (route, subtitle, icon) ->
+                    MoreTile(route, subtitle, icon, Modifier.weight(1f)) { onNavigate(route) }
                 }
-                Column(Modifier.weight(1f)) {
-                    Text(if (route == "MALImport") "MAL Import" else route, color = White, fontWeight = FontWeight.SemiBold)
-                    Text(subtitle, color = Muted, fontSize = 12.sp)
-                }
-                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
+                if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
         Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun MoreTile(route: String, subtitle: String, icon: ImageVector, modifier: Modifier, onClick: () -> Unit) {
+    val label = when (route) {
+        "MALImport" -> "MAL Import"
+        "CustomLists" -> "Custom lists"
+        "VideoPlayer" -> "Video player"
+        "CommunityVideos" -> "Community videos"
+        else -> route
+    }
+    Column(
+        modifier.height(138.dp).animeCard(RoundedCornerShape(20.dp)).clickable(onClick = onClick).padding(14.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Box(
+            Modifier.size(42.dp).background(
+                Brush.linearGradient(listOf(Violet.copy(alpha = .35f), Sakura.copy(alpha = .2f))), RoundedCornerShape(14.dp)
+            ),
+            contentAlignment = Alignment.Center
+        ) { Icon(icon, contentDescription = null, tint = Violet) }
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(label, color = White, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1)
+            Text(subtitle, color = Muted, fontSize = 11.sp, lineHeight = 14.sp, maxLines = 3)
+        }
     }
 }

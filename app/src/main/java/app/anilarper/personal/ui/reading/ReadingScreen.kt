@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
@@ -73,11 +74,11 @@ fun ReadingScreen(
         LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 20.dp),
             modifier = Modifier.weight(1f)) {
             items(visibleSaved, key = { it.kind + "-" + it.id }) { title ->
-                Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(11.dp),
+                Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp)).padding(11.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        AsyncImage(model = title.cover, contentDescription = title.title,
-                            modifier = Modifier.width(54.dp).height(72.dp).background(Panel2, RoundedCornerShape(8.dp)))
+                        AsyncImage(model = title.cover, contentScale = androidx.compose.ui.layout.ContentScale.Crop, contentDescription = title.title,
+                            modifier = Modifier.width(54.dp).height(72.dp).clip(RoundedCornerShape(8.dp)).background(Panel2))
                         Column(Modifier.weight(1f)) {
                             Text(title.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
                             Text(title.format + " • " + title.readingStatus, color = Violet, fontSize = 10.sp)
@@ -126,10 +127,10 @@ fun ReadingScreen(
             error?.let { message -> item { Text(message, color = Muted, fontSize = 12.sp) } }
             items(results, key = { "result-" + it.kind + "-" + it.id }) { title ->
                 val saved = library.any { it.id == title.id && it.kind == title.kind }
-                Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(13.dp)).padding(10.dp),
+                Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(13.dp)).padding(10.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    AsyncImage(model = title.cover, contentDescription = title.title,
-                        modifier = Modifier.width(52.dp).height(70.dp).background(Panel2, RoundedCornerShape(8.dp)))
+                    AsyncImage(model = title.cover, contentScale = androidx.compose.ui.layout.ContentScale.Crop, contentDescription = title.title,
+                        modifier = Modifier.width(52.dp).height(70.dp).clip(RoundedCornerShape(8.dp)).background(Panel2))
                     Column(Modifier.weight(1f)) {
                         Text(title.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 2)
                         Text(title.format + " • " + (title.chapters?.let { it.toString() + " chapters" } ?: "Chapter count unknown"),

@@ -201,7 +201,7 @@ fun MusicScreen(modifier: Modifier = Modifier) {
             if (links.isNotEmpty()) {
                 item { Text("STREAMING LINKS", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
                 items(links, key = { it.url }) { link ->
-                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).clickable {
+                    Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp)).clickable {
                         runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url))) }
                             .onFailure { message = "Couldn't open this music link." }
                     }.padding(13.dp), verticalAlignment = Alignment.CenterVertically,
@@ -220,7 +220,7 @@ fun MusicScreen(modifier: Modifier = Modifier) {
             if (tracks.isNotEmpty()) {
                 item { Text("LOCAL AUDIO FILES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
                 items(tracks, key = { it.uri }) { track ->
-                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(13.dp)).clickable {
+                    Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(13.dp)).clickable {
                         val controller = player
                         if (current == track.uri && controller != null) {
                             if (preparing) message = "Audio is still preparing…"
@@ -249,7 +249,7 @@ fun MusicScreen(modifier: Modifier = Modifier) {
                 }
             }
             if (links.isEmpty() && tracks.isEmpty()) item {
-                Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(20.dp),
+                Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(18.dp)).padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Default.MusicNote, contentDescription = null, tint = Violet, modifier = Modifier.size(34.dp))
                     Text("Your music shelf is empty.", color = White, fontWeight = FontWeight.SemiBold)

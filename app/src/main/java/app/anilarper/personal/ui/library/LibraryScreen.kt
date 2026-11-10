@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -25,10 +26,10 @@ import app.anilarper.personal.ui.home.DashboardStat
 
 @Composable
 internal fun AnimeRow(anime: Anime, saved: Boolean, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(16.dp))
+    Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(16.dp))
         .clickable(onClick = onClick).padding(10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        AsyncImage(model = anime.cover, contentDescription = anime.title,
-            modifier = Modifier.width(76.dp).height(104.dp).background(Panel2, RoundedCornerShape(10.dp)))
+        AsyncImage(model = anime.cover, contentScale = androidx.compose.ui.layout.ContentScale.Crop, contentDescription = anime.title,
+            modifier = Modifier.width(76.dp).height(104.dp).clip(RoundedCornerShape(10.dp)).background(Panel2))
         Column(Modifier.weight(1f).height(104.dp), verticalArrangement = Arrangement.SpaceBetween) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(anime.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 2)
@@ -109,7 +110,7 @@ fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, onRemove:
         Spacer(Modifier.height(7.dp))
         if (visible.isEmpty()) {
             Column(
-                Modifier.fillMaxWidth().weight(1f).background(Panel, RoundedCornerShape(20.dp)).padding(22.dp),
+                Modifier.fillMaxWidth().weight(1f).animeCard(RoundedCornerShape(20.dp)).padding(22.dp),
                 verticalArrangement = Arrangement.spacedBy(9.dp), horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Icon(if (library.isEmpty()) Icons.Default.Bookmarks else Icons.Default.SearchOff,
@@ -130,14 +131,14 @@ fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, onRemove:
             ) {
                 items(visible, key = { it.id }) { anime ->
                     Column(
-                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(17.dp)).padding(12.dp),
+                        Modifier.fillMaxWidth().animeCard(RoundedCornerShape(17.dp)).padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(9.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
                             AsyncImage(
                                 model = anime.cover, contentDescription = anime.title,
                                 contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                modifier = Modifier.width(66.dp).height(88.dp).background(Panel2, RoundedCornerShape(10.dp))
+                                modifier = Modifier.width(66.dp).height(88.dp).clip(RoundedCornerShape(10.dp)).background(Panel2)
                             )
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                                 Text(anime.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
@@ -148,11 +149,7 @@ fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, onRemove:
                                     color = Muted, fontSize = 11.sp
                                 )
                                 if (anime.episodes != null && anime.episodes > 0) {
-                                    LinearProgressIndicator(
-                                        progress = { (anime.progress.toFloat() / anime.episodes).coerceIn(0f, 1f) },
-                                        modifier = Modifier.fillMaxWidth().height(5.dp),
-                                        color = Violet, trackColor = Panel2
-                                    )
+                                    GradientProgress((anime.progress.toFloat() / anime.episodes).coerceIn(0f, 1f), Modifier.fillMaxWidth())
                                 }
                             }
                             IconButton(onClick = { onRemove(anime) }) {
