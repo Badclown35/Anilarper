@@ -220,7 +220,12 @@ export default {
         return respond("Anilarper public media API. Open /admin to manage uploads.", 200, { "Content-Type": "text/plain; charset=utf-8" });
       }
       if (url.pathname === "/admin" && request.method === "GET") {
-        return env.ASSETS.fetch(new Request(new URL("/admin.html", request.url), { method: "GET" }));
+        const asset = await env.ASSETS.fetch(new Request(new URL("/admin.html", request.url), { method: "GET" }));
+        const headers = new Headers(asset.headers);
+        headers.set("Cache-Control", "no-store");
+        headers.set("X-Content-Type-Options", "nosniff");
+        headers.set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:");
+        return respond(asset.body, asset.status, headers);
       }
       return await handleApi(request, env, url);
     } catch (error) {
