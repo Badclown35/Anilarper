@@ -45,3 +45,12 @@ All notable changes to Anilarper are documented here.
 - Redesigned Home (hero banner, gradient episode progress, poster rail), the bottom navigation bar and the More screen (two-column tile grid).
 - Fixed cover art that was stretched or letterboxed (missing crop) in Library rows, Reading, History, Recommendations, Discover details and the profile avatar; images are now clipped to their rounded corners.
 - Themed Material dialogs/menus (surface container colors) and set app-wide shapes and typography.
+
+## Full app refresh (2026-11-10; Android build pending)
+
+- Refined the shared midnight theme, card surfaces, backdrop, section headers, labels, and progress indicators so existing screens share one consistent visual language.
+- Rebuilt the Home dashboard with a direct discovery entry point, library-aware continue-watching feature, collection snapshot, and grouped shortcuts.
+- Organized the More hub into Discover & Collect, Read & Listen, Watch & Share, Your Activity, and Account & Data.
+- Made recommendation taste signals visible and labeled matching genres on each suggested title.
+- Preserved existing AniList, MAL import, manga/light-novel catalog, music, local video, Cloudflare community media, history, quests, statistics, and backup flows.
+- Used Anime Chicken's public feature descriptions as inspiration for discovery and reader usability; no external app code or streaming sources were copied or integrated.
