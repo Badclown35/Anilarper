@@ -21,8 +21,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Run Worker API tests
+        working-directory: cloudflare-media
+        run: npm test
       - name: Check Worker JavaScript syntax
-        run: node --input-type=module --check < cloudflare-media/src/index.js
+        working-directory: cloudflare-media
+        run: npm run check
       - name: Check admin page JavaScript syntax
         run: |
           python - <<'PY'
