@@ -78,7 +78,7 @@ async function assertS3(response, operation) {
   throw new Error(operation + " failed (" + response.status + (code ? ", " + code[1] : "") + ").");
 }
 function xmlValue(xml, name) {
-  const match = new RegExp("<" + name + ">([\s\S]*?)</" + name + ">").exec(xml);
+  const match = new RegExp("<" + name + ">([\\s\\S]*?)</" + name + ">").exec(xml);
   return match ? match[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">") : "";
 }
 async function readCatalog(env) {
@@ -113,7 +113,30 @@ async function streamMedia(request, env, id) {
   if (!video) return json({ error: "Video not found." }, 404);
   const headers = {};
   const range = request.headers.get("Range");
-  if (range) headers.Range = range;
+  if (range) {
+    const match = /^bytes=(\\d*)-(\\d*)$/.exec(range.trim());
+    if (!match || (!match[1] && !match[2])) {
+      return respond(null, 416, { "Content-Range": "bytes */" + video.size, "Accept-Ranges": "bytes" });
+    }
+    let start = 0;
+    let end = video.size - 1;
+    if (!match[1]) {
+      const suffix = Number(match[2]);
+      if (!Number.isSafeInteger(suffix) || suffix <= 0) {
+        return respond(null, 416, { "Content-Range": "bytes */" + video.size, "Accept-Ranges": "bytes" });
+      }
+      start = Math.max(0, video.size - suffix);
+    } else {
+      start = Number(match[1]);
+      if (match[2]) end = Math.min(Number(match[2]), video.size - 1);
+    }
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= video.size || end < start) {
+      return respond(null, 416, { "Content-Range": "bytes */" + video.size, "Accept-Ranges": "bytes" });
+    }
+    headers.Range = "bytes=" + start + "-" + end;
+    const ifRange = request.headers.get("If-Range");
+    if (ifRange) headers["If-Range"] = ifRange;
+  }
   const upstream = await b2Request(env, request.method, MEDIA_PREFIX + id, { headers });
   if (upstream.status === 404) return json({ error: "Video file is missing." }, 404);
   if (upstream.status !== 200 && upstream.status !== 206) {
