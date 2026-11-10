@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -204,6 +206,21 @@ fun RecommendationsScreen(library: List<Anime>, onAdd: (Anime) -> Unit, modifier
         Text("DISCOVER YOUR NEXT", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
         Text("Recommendations", color = White, fontSize = 27.sp, fontWeight = FontWeight.ExtraBold)
         Text(message, color = Muted, fontSize = 12.sp)
+        if (genreWeights.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("YOUR TASTE PROFILE", color = Violet, fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    genreWeights.forEach { (genre, _) ->
+                        Pill(genre.uppercase(), color = Aqua)
+                    }
+                }
+            }
+        } else if (library.isNotEmpty()) {
+            Text("Add or refresh titles with genre details to improve your taste profile.",
+                color = Muted, fontSize = 10.sp)
+        }
         Spacer(Modifier.height(10.dp))
         Button(onClick = { load() }, enabled = !loading, colors = ButtonDefaults.buttonColors(containerColor = Violet, contentColor = Ink)) {
             if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -217,6 +234,9 @@ fun RecommendationsScreen(library: List<Anime>, onAdd: (Anime) -> Unit, modifier
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
                 items(results, key = { it.id }) { anime ->
+                    val matchedGenres = anime.genres.filter { candidate ->
+                        genreWeights.any { it.first.equals(candidate, ignoreCase = true) }
+                    }
                     Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         androidx.compose.foundation.layout.Box(Modifier.width(60.dp).height(84.dp)) {
                             coil.compose.AsyncImage(model = anime.cover, contentScale = androidx.compose.ui.layout.ContentScale.Crop, contentDescription = anime.title, modifier = Modifier.fillMaxSize())
@@ -224,6 +244,8 @@ fun RecommendationsScreen(library: List<Anime>, onAdd: (Anime) -> Unit, modifier
                         Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                             Text(anime.title, color = White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                             Text(anime.genres.take(3).joinToString(" • "), color = Muted, fontSize = 10.sp)
+                            Text(if (matchedGenres.isNotEmpty()) "MATCHES: " + matchedGenres.take(2).joinToString(" • ")
+                                else "POPULAR PICK", color = Aqua, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             Text("★ ${anime.score ?: "—"}", color = Violet, fontSize = 10.sp)
                         }
                         IconButton(onClick = { onAdd(anime); results = results.filterNot { it.id == anime.id } }) {
