@@ -1,6 +1,10 @@
 package app.anilarper.personal.ui.extras
 
+import android.app.Activity
 import android.content.Context
+import android.content.pm.ActivityInfo
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import app.anilarper.personal.theme.*
 import kotlinx.coroutines.Dispatchers
@@ -46,7 +51,7 @@ private fun isPrivateLanHost(host: String): Boolean {
 private data class SharedVideo(val id: String, val title: String, val category: String, val size: Long, val streamPath: String)
 
 @Composable
-fun CommunityVideosScreen(modifier: Modifier = Modifier) {
+fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("anilarper_media", Context.MODE_PRIVATE) }
     var serverAddress by remember { mutableStateOf(prefs.getString("server_url", "") ?: "") }
@@ -57,6 +62,27 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
     var status by remember { mutableStateOf("Enter the secure server address to browse shared videos.") }
     var loading by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<SharedVideo?>(null) }
+    var fullscreen by remember { mutableStateOf(false) }
+    val activity = context as? Activity
+    val originalOrientation = remember(activity) { activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+
+    LaunchedEffect(fullscreen) { onFullscreenChange(fullscreen) }
+    DisposableEffect(fullscreen, activity) {
+        val window = activity?.window
+        val bars = if (window != null) WindowInsetsControllerCompat(window, window.decorView) else null
+        if (fullscreen) {
+            bars?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            bars?.hide(WindowInsetsCompat.Type.systemBars())
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            bars?.show(WindowInsetsCompat.Type.systemBars())
+            activity?.requestedOrientation = originalOrientation
+        }
+        onDispose {
+            bars?.show(WindowInsetsCompat.Type.systemBars())
+            activity?.requestedOrientation = originalOrientation
+        }
+    }
     val scope = rememberCoroutineScope()
     val player = remember { ExoPlayer.Builder(context).build() }
 
@@ -116,7 +142,26 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    Column(
+    if (fullscreen && selected != null) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            AndroidView(
+                factory = { PlayerView(it).apply {
+                    this.player = player
+                    useController = true
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                    keepScreenOn = true
+                } },
+                update = { it.player = player },
+                modifier = Modifier.fillMaxSize()
+            )
+            TextButton(
+                onClick = { fullscreen = false },
+                modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+            ) { Text("EXIT FULLSCREEN") }
+        }
+    } else Column(
         modifier.fillMaxSize().background(Ink).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -152,9 +197,18 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
         }
         Text(status, color = Muted, fontSize = 12.sp)
         if (selected != null) {
-            Text("NOW PLAYING • ${selected!!.title}", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("NOW PLAYING • ${selected!!.title}", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1)
+                TextButton(onClick = { fullscreen = true }) { Text("FULLSCREEN") }
+            }
             AndroidView(
-                factory = { PlayerView(it).apply { this.player = player; useController = true } },
+                factory = { PlayerView(it).apply {
+                    this.player = player
+                    useController = true
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                    keepScreenOn = true
+                } },
                 update = { it.player = player },
                 modifier = Modifier.fillMaxWidth().height(210.dp).background(Color.Black, RoundedCornerShape(12.dp))
             )
