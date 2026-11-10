@@ -43,7 +43,7 @@ async function readCatalog(bucket) {
   if (!obj) return { videos: [], pending: [] };
   try {
     const data = await obj.json();
-    return { videos: Array.isArray(data.videos) ? data.videos : [], pending: Array.isArray(data.pending) ? data.pending : [] };
+    return { videos: Array.isArray(data.videos) ? data.videos : [], pending: (Array.isArray(data.pending) ? data.pending : []).filter(function(p) { return Number(p.created || 0) > Date.now() - 8 * 24 * 60 * 60 * 1000; }) };
   } catch (_) {
     throw new Error("Media catalog is damaged. Stop uploads and restore a backup.");
   }
@@ -212,7 +212,7 @@ export default {
         return respond("Anilarper public media API. Open /admin to manage uploads.", 200, { "Content-Type": "text/plain; charset=utf-8" });
       }
       if (url.pathname === "/admin" && request.method === "GET") {
-        return env.ASSETS.fetch(new Request(new URL("/admin.html", request.url), request));
+        return env.ASSETS.fetch(new Request(new URL("/admin.html", request.url), { method: "GET" }));
       }
       return await handleApi(request, env, url);
     } catch (error) {
