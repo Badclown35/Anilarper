@@ -216,7 +216,9 @@ object AniListApi {
             val response = stream.bufferedReader().use { it.readText() }
             if (code !in 200..299) {
                 val message = runCatching { JSONObject(response).optJSONArray("errors")?.optJSONObject(0)?.optString("message") }.getOrNull()
-                error(message?.takeIf { it.isNotBlank() } ?: "AniList returned HTTP $code")
+                val retryAfter = connection.getHeaderField("Retry-After")?.takeIf { it.isNotBlank() }
+                val detail = message?.takeIf { it.isNotBlank() } ?: "request failed"
+                error("AniList returned HTTP $code: $detail" + (retryAfter?.let { " (Retry-After: $it)" } ?: ""))
             }
             val json = JSONObject(response)
             if (json.has("errors")) error(json.getJSONArray("errors").optJSONObject(0)?.optString("message") ?: "AniList query failed")
