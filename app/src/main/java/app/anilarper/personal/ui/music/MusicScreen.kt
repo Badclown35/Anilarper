@@ -63,7 +63,6 @@ fun MusicScreen(modifier: Modifier = Modifier) {
                 .onFailure { message = "The audio service couldn't be started." }
         }, Executor { command -> command.run() })
         onDispose {
-            player?.release()
             MediaController.releaseFuture(controllerFuture)
         }
     }
