@@ -24,6 +24,9 @@ jobs:
       - name: Run Worker API tests
         working-directory: cloudflare-media
         run: npm test
+      - name: Validate Wrangler configuration and bundle
+        working-directory: cloudflare-media
+        run: npx --yes wrangler@4 deploy --dry-run --outdir /tmp/anilarper-worker-dry-run
       - name: Check Worker JavaScript syntax
         working-directory: cloudflare-media
         run: npm run check
