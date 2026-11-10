@@ -32,7 +32,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           import re
-          html = Path("cloudflare-media/public/admin.html").read_text()
+          html = Path("public/admin.html").read_text()
           scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
           if len(scripts) != 1:
               raise SystemExit("Expected exactly one inline admin script")
