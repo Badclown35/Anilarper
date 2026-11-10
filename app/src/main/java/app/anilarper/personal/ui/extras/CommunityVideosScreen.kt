@@ -65,6 +65,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
     var usedBytes by remember { mutableLongStateOf(0L) }
     var pendingBytes by remember { mutableLongStateOf(0L) }
     var maxBytes by remember { mutableLongStateOf(10_000_000_000L) }
+    var phoneStorageOnline by remember { mutableStateOf(false) }
     var speedMenu by remember { mutableStateOf(false) }
     var playbackSpeed by remember { mutableFloatStateOf(1f) }
     var status by remember { mutableStateOf("Enter the secure server address to browse shared videos.") }
@@ -171,6 +172,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                         val responseJson = JSONObject(body)
                 val storageJson = responseJson.optJSONObject("storage")
                 val storage = Triple(storageJson?.optLong("usedBytes", 0L) ?: 0L, storageJson?.optLong("pendingBytes", 0L) ?: 0L, storageJson?.optLong("maxBytes", 10_000_000_000L) ?: 10_000_000_000L)
+                val phoneOnline = storageJson?.optJSONObject("providers")?.optJSONObject("phone")?.optBoolean("online", false) ?: false
                 val array = responseJson.optJSONArray("videos") ?: org.json.JSONArray()
                         val parsedVideos = buildList {
                             for (i in 0 until array.length()) {
@@ -184,12 +186,13 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                                 }
                             }
                         }
-                        Pair(parsedVideos, storage)
+                        Triple(parsedVideos, storage, phoneOnline)
                     } finally { connection.disconnect() }
                 }
                 usedBytes = catalogResult.second.first.coerceAtLeast(0L)
                 pendingBytes = catalogResult.second.second.coerceAtLeast(0L)
                 maxBytes = catalogResult.second.third.coerceAtLeast(1L)
+                phoneStorageOnline = catalogResult.third
                 val result = catalogResult.first
                 prefs.edit().putString("server_url", normalized).apply()
                 connectedAddress = normalized
@@ -306,6 +309,9 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                     color = if (fraction >= .85f) Color(0xFFFFB86B) else Violet, trackColor = Panel2)
                 Text(String.format("%.2f / %.2f GB • %.2f GB pending", totalUsed / 1e9, maxBytes / 1e9, pendingBytes / 1e9),
                     color = Muted, fontSize = 10.sp)
+                Text(if (phoneStorageOnline) "BACKUP PHONE • ONLINE" else "BACKUP PHONE • OFFLINE / NOT CONFIGURED",
+                    color = if (phoneStorageOnline) Color(0xFF83DDB0) else Muted,
+                    fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                 if (fraction >= .95f) Text("Almost full — remove unused videos before uploading more.", color = Color(0xFFFFB86B), fontSize = 11.sp)
                 else if (fraction >= .85f) Text("Storage is getting low. Check the library before your next upload.", color = Color(0xFFFFB86B), fontSize = 11.sp)
             }
