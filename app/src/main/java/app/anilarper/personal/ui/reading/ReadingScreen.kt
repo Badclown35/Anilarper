@@ -100,6 +100,7 @@ fun ReadingScreen(
             TextButton(onClick = { keyboard?.hide(); search() }) { Text("Search", color = Violet) }
             }
         }
+        }
         items(visibleSaved, key = { it.kind + "-" + it.id }) { title ->
                 Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp)).padding(11.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -258,7 +259,6 @@ fun ReadingScreen(
                     }
                 }
                 }
-            }
             }
             item {
                 SourceGroupHeader("CATALOGS & DATABASES", "${catalogResults.size} results • AniList + Kitsu", catalogGroupExpanded || novels) {
