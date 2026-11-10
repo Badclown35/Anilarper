@@ -97,12 +97,13 @@ test("uploads require admin auth and public media supports byte ranges", async (
   }), e);
   assert.equal(started.status, 201);
   const session = await started.json();
+  const catalogAfterStart = await (await e.MEDIA_BUCKET.get("_anilarper/catalog.json")).json();
 
   const part = await worker.fetch(request("/api/upload/part?id=" + encodeURIComponent(session.id) +
     "&uploadId=" + encodeURIComponent(session.uploadId) + "&partNumber=1", {
       method: "PUT", headers: { ...adminHeaders, "Content-Length": "3" }, body: new Uint8Array([65, 66, 67])
     }), e);
-  assert.equal(part.status, 200, await part.clone().text());
+  assert.equal(part.status, 200, await part.clone().text() + " session=" + JSON.stringify(session) + " pending=" + JSON.stringify(catalogAfterStart.pending));
   const partData = await part.json();
 
   const completed = await worker.fetch(request("/api/upload/complete", {
