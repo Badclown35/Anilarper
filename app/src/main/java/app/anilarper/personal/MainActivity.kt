@@ -94,7 +94,7 @@ private fun AnilarperApp() {
             containerColor = Color.Transparent,
             bottomBar = {
                 if (!communityVideoFullscreen) NavigationBar(
-                    containerColor = Panel.copy(alpha = .96f),
+                    containerColor = Ink.copy(alpha = .98f),
                     tonalElevation = 0.dp,
                     modifier = Modifier.drawBehind {
                         drawLine(
@@ -127,7 +127,7 @@ private fun AnilarperApp() {
                             alwaysShowLabel = true,
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = Violet, selectedTextColor = Violet,
-                                indicatorColor = Violet.copy(alpha = .22f),
+                                indicatorColor = Violet.copy(alpha = .15f),
                                 unselectedIconColor = Muted,
                                 unselectedTextColor = Muted
                             )
@@ -191,39 +191,55 @@ private fun AnilarperApp() {
 
 @Composable
 private fun MoreScreen(onNavigate: (String) -> Unit) {
-    val entries = listOf(
-        Triple("Read", "Manga & light novels", Icons.Default.MenuBook),
-        Triple("Music", "Soundtracks and local tracks", Icons.Default.LibraryMusic),
-        Triple("Quests", "Milestones & XP", Icons.Default.EmojiEvents),
-        Triple("Stats", "Anime and reading activity", Icons.Default.Insights),
-        Triple("History", "Recently updated episodes", Icons.Default.History),
-        Triple("Backup", "Export or restore your collection", Icons.Default.Backup),
-        Triple("Profile", "Personalize your profile", Icons.Default.Person),
-        Triple("CustomLists", "Create and manage anime collections", Icons.Default.Bookmarks),
-        Triple("Recommendations", "Discover anime based on your library", Icons.Default.AutoAwesome),
-        Triple("MALImport", "Import your MyAnimeList anime CSV", Icons.Default.FileDownload),
-        Triple("Schedule", "Browse anime by season and year", Icons.Default.CalendarMonth),
-        Triple("VideoPlayer", "Play video files from your device", Icons.Default.VideoLibrary),
-        Triple("CommunityVideos", "Browse videos shared from the community server", Icons.Default.Cloud)
+    val groups = listOf(
+        "DISCOVER & COLLECT" to listOf(
+            Triple("Recommendations", "Discover anime based on your library", Icons.Default.AutoAwesome),
+            Triple("Schedule", "Browse anime by season and year", Icons.Default.CalendarMonth),
+            Triple("CustomLists", "Create and manage anime collections", Icons.Default.Bookmarks),
+            Triple("MALImport", "Import your MyAnimeList anime CSV", Icons.Default.FileDownload)
+        ),
+        "READ & LISTEN" to listOf(
+            Triple("Read", "Manga and light novels", Icons.Default.MenuBook),
+            Triple("Music", "Soundtracks and local tracks", Icons.Default.LibraryMusic)
+        ),
+        "WATCH & SHARE" to listOf(
+            Triple("VideoPlayer", "Play video files from your device", Icons.Default.VideoLibrary),
+            Triple("CommunityVideos", "Browse your community media library", Icons.Default.Cloud)
+        ),
+        "YOUR ACTIVITY" to listOf(
+            Triple("Quests", "Milestones and XP", Icons.Default.EmojiEvents),
+            Triple("Stats", "Anime and reading statistics", Icons.Default.Insights),
+            Triple("History", "Recently updated episodes", Icons.Default.History)
+        ),
+        "ACCOUNT & DATA" to listOf(
+            Triple("Profile", "Personalize your profile", Icons.Default.Person),
+            Triple("Backup", "Export or restore your collection", Icons.Default.Backup)
+        )
     )
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 18.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-        Text("MORE", color = Violet, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
-        Text("Your tools & extras", color = White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-        Text("Everything beyond your main library.", color = Muted, fontSize = 13.sp)
-        Spacer(Modifier.height(4.dp))
-        entries.chunked(2).forEach { pair ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                pair.forEach { (route, subtitle, icon) ->
-                    MoreTile(route, subtitle, icon, Modifier.weight(1f)) { onNavigate(route) }
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("ANILARPER", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.5.sp)
+            Text("Your space.", color = White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+            Text("Everything in one place, neatly organized.", color = Muted, fontSize = 12.sp)
+        }
+        groups.forEach { (heading, entries) ->
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text(heading, color = Violet, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.2.sp)
+                entries.chunked(2).forEach { pair ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        pair.forEach { (route, subtitle, icon) ->
+                            MoreTile(route, subtitle, icon, Modifier.weight(1f)) { onNavigate(route) }
+                        }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    }
                 }
-                if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
     }
 }
 
