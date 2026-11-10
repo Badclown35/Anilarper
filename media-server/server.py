@@ -330,18 +330,20 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK:
                     if dest.exists() or dest.is_symlink():
                         raise FileExistsError("File already exists.")
-                    temp.replace(dest)
                     metadata = read_metadata()
                     metadata[name] = {
                         "title": clean_text(query.get("title", [Path(name).stem])[0], 120) or Path(name).stem,
                         "category": clean_text(query.get("category", ["Uncategorized"])[0], 40) or "Uncategorized",
-                        "visibility": "public" if query.get("publish", ["false"])[0].lower() == "true" else "private"
+                        "visibility": "private"
                     }
+                    # Commit a private metadata record before the file becomes visible.
                     write_metadata(metadata)
+                    temp.replace(dest)
+                    if query.get("publish", ["false"])[0].lower() == "true":
+                        metadata[name]["visibility"] = "public"
+                        write_metadata(metadata)
             except Exception:
                 temp.unlink(missing_ok=True)
-                if dest.exists() and name not in read_metadata():
-                    dest.unlink(missing_ok=True)
                 raise
             self.send_json(201, {"ok": True, "name": name, "size": length,
                                  "visibility": metadata[name]["visibility"]})
