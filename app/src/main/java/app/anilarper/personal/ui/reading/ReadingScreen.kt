@@ -61,7 +61,13 @@ fun ReadingScreen(
     fun search() { searchViewModel.search(query, novels, catalogCache) }
     LaunchedEffect(novels) { search() }
     val visibleSaved = library.filter { it.kind == if (novels) "NOVEL" else "MANGA" }
-    Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+    LazyColumn(
+        modifier = modifier.fillMaxSize().padding(horizontal = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+        contentPadding = PaddingValues(bottom = 20.dp)
+    ) {
+        item {
+            Column(Modifier.fillMaxWidth()) {
         Spacer(Modifier.height(18.dp))
         Text("YOUR READING SHELF", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
         Text(if (novels) "Light novels." else "Manga.", color = White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
@@ -93,8 +99,7 @@ fun ReadingScreen(
             Spacer(Modifier.weight(1f))
             TextButton(onClick = { keyboard?.hide(); search() }) { Text("Search", color = Violet) }
         }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 20.dp),
-            modifier = Modifier.weight(1f)) {
+            }
             items(visibleSaved, key = { it.kind + "-" + it.id }) { title ->
                 Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp)).padding(11.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -276,7 +281,6 @@ fun ReadingScreen(
                     }
                 }
             }
-        }
     }
 }
 
