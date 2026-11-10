@@ -88,4 +88,33 @@ object MangaDexApi {
             connection.disconnect()
         }
     }
+    /**
+     * Returns a real English, safe-rated chapter on MangaDex, or null when none exists.
+     * This is checked on demand so a catalog result is never falsely advertised as readable.
+     */
+    suspend fun firstEnglishSafeChapterUrl(mangaId: String): String? = withContext(Dispatchers.IO) {
+        if (mangaId.isBlank()) return@withContext null
+        val url = URL("$API/manga/${URLEncoder.encode(mangaId, "UTF-8")}/feed" +
+            "?limit=1&offset=0&translatedLanguage%5B%5D=en" +
+            "&contentRating%5B%5D=safe&order%5Bchapter%5D=asc")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 12000
+            readTimeout = 18000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "Anilarper/1.0 (Android manga reader link checker)")
+        }
+        try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val raw = stream.bufferedReader().use { it.readText() }
+            if (code !in 200..299) error("MangaDex chapter lookup returned HTTP $code")
+            val data = JSONObject(raw).optJSONArray("data") ?: return@withContext null
+            val chapterId = data.optJSONObject(0)?.optString("id").orEmpty()
+            chapterId.takeIf { it.isNotBlank() }?.let { "https://mangadex.org/chapter/$it" }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
 }
