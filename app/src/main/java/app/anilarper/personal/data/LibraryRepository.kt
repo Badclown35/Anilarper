@@ -91,7 +91,8 @@ class LibraryRepository(context: Context) {
         if (o.isNull("chapters")) null else o.optInt("chapters"),
         if (o.isNull("volumes")) null else o.optInt("volumes"), o.optString("description"),
         o.optString("kind", "MANGA"), o.optInt("progress"), o.optInt("volumeProgress"),
-        o.optString("readingStatus", "PLANNING")
+        o.optString("readingStatus", "PLANNING"), o.optString("provider", "AniList"),
+        o.optString("providerId"), o.optString("sourceUrl")
     )
 
     private fun Anime.toJson() = JSONObject()
@@ -108,7 +109,8 @@ class LibraryRepository(context: Context) {
         .put("cover", cover).put("format", format).put("status", status)
         .put("chapters", chapters).put("volumes", volumes).put("description", description)
         .put("kind", kind).put("progress", progress).put("volumeProgress", volumeProgress)
-        .put("readingStatus", readingStatus)
+        .put("readingStatus", readingStatus).put("provider", provider)
+        .put("providerId", providerId).put("sourceUrl", sourceUrl)
 
     fun loadAnime(): List<Anime> = readArray("library")?.mapNotNull { o ->
         runCatching {
@@ -151,7 +153,8 @@ class LibraryRepository(context: Context) {
                 if (o.isNull("chapters")) null else o.optInt("chapters"),
                 if (o.isNull("volumes")) null else o.optInt("volumes"), o.optString("description"),
                 o.optString("kind", "MANGA"), o.optInt("progress"), o.optInt("volumeProgress"),
-                o.optString("readingStatus", "PLANNING")
+                o.optString("readingStatus", "PLANNING"), o.optString("provider", "AniList"),
+                o.optString("providerId"), o.optString("sourceUrl")
             )
         }.getOrNull()
     } ?: emptyList()
@@ -165,7 +168,8 @@ class LibraryRepository(context: Context) {
                 .put("chapters", item.chapters).put("volumes", item.volumes)
                 .put("description", item.description).put("kind", item.kind)
                 .put("progress", item.progress).put("volumeProgress", item.volumeProgress)
-                .put("readingStatus", item.readingStatus))
+                .put("readingStatus", item.readingStatus).put("provider", item.provider)
+                .put("providerId", item.providerId).put("sourceUrl", item.sourceUrl))
         }
         check(preferences.edit().putString("readingLibrary", array.toString()).commit()) {
             "Couldn't save reading library."
