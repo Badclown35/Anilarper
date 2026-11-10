@@ -98,9 +98,9 @@ fun ReadingScreen(
             Text("YOUR SAVED TITLES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
             Spacer(Modifier.weight(1f))
             TextButton(onClick = { keyboard?.hide(); search() }) { Text("Search", color = Violet) }
-        }
             }
-            items(visibleSaved, key = { it.kind + "-" + it.id }) { title ->
+        }
+        items(visibleSaved, key = { it.kind + "-" + it.id }) { title ->
                 Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp)).padding(11.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
