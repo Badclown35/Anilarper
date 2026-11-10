@@ -21,10 +21,10 @@ object MangaDexApi {
     suspend fun search(query: String): List<ReadingTitle> = withContext(Dispatchers.IO) {
         val params = buildString {
             append("?limit=50&offset=0")
-            append("&order[followedCount]=desc")
-            append("&contentRating[]=safe")
-            append("&availableTranslatedLanguage[]=en")
-            append("&includes[]=cover_art")
+            append("&order%5BfollowedCount%5D=desc")
+            append("&contentRating%5B%5D=safe")
+            append("&availableTranslatedLanguage%5B%5D=en")
+            append("&includes%5B%5D=cover_art")
             if (query.isNotBlank()) append("&title=").append(URLEncoder.encode(query.trim(), "UTF-8"))
         }
         val connection = (URL(API + "/manga" + params).openConnection() as HttpURLConnection).apply {
@@ -56,10 +56,6 @@ object MangaDexApi {
                             val relation = relationships.optJSONObject(j) ?: continue
                             if (relation.optString("type") == "cover_art") {
                                 coverFile = relation.optJSONObject("attributes")?.optString("fileName").orEmpty()
-                                if (coverFile.isBlank()) {
-                                    // Some responses keep the filename on the related entity.
-                                    coverFile = relation.optString("id")
-                                }
                                 break
                             }
                         }
