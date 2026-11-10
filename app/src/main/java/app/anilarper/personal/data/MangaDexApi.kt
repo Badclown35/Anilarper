@@ -96,7 +96,7 @@ object MangaDexApi {
         if (mangaId.isBlank()) return@withContext null
         val url = URL("$API/manga/${URLEncoder.encode(mangaId, "UTF-8")}/feed" +
             "?limit=1&offset=0&translatedLanguage%5B%5D=en" +
-            "&contentRating%5B%5D=safe&includeUnavailable=0&includeExternalUrl=0&order%5Bchapter%5D=asc")
+            "&contentRating%5B%5D=safe&includeUnavailable=false&includeExternalUrl=false&order%5Bchapter%5D=asc")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 12000
