@@ -20,7 +20,7 @@ object MangaDexApi {
 
     suspend fun search(query: String): List<ReadingTitle> = withContext(Dispatchers.IO) {
         val params = buildString {
-            append("?limit=50&offset=0")
+            append("?limit=100&offset=0")
             append("&order%5BfollowedCount%5D=desc")
             append("&contentRating%5B%5D=safe")
             append("&availableTranslatedLanguage%5B%5D=en")
