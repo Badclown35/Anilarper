@@ -112,7 +112,13 @@ class Handler(BaseHTTPRequestHandler):
             name = unquote(parsed.path[len("/api/videos/"):-len("/metadata")].strip("/"))
             if not name or Path(name).name != name or not (MEDIA / name).is_file(): self.send_error(404); return
             try:
-                payload = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length", "0")), 4096)).decode("utf-8"))
+                body_length = int(self.headers.get("Content-Length", "0"))
+                if body_length <= 0 or body_length > 4096:
+                    self.send_json(413, {"error": "Metadata request must be between 1 and 4096 bytes."})
+                    return
+                payload = json.loads(self.rfile.read(body_length).decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("Metadata must be a JSON object.")
                 metadata = read_metadata()
                 metadata[name] = {"title": clean_text(payload.get("title"), 120) or Path(name).stem, "category": clean_text(payload.get("category"), 40) or "Uncategorized"}
                 META_FILE.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
