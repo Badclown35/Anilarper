@@ -104,7 +104,7 @@ object AniListApi {
         if (malId <= 0) return@withContext null
         val gql = """
             query {
-                Media(idMal: $malId, type: ANIME) {
+                Media(idMal: $malId, type: ANIME, isAdult: false) {
                     $FIELDS
                 }
             }
