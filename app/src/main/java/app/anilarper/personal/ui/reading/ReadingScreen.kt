@@ -28,6 +28,8 @@ import coil.compose.AsyncImage
 import app.anilarper.personal.data.ReadingSearchViewModel
 import app.anilarper.personal.data.CatalogCacheRepository
 import app.anilarper.personal.ReadingTitle
+import app.anilarper.personal.data.MangaDexApi
+import kotlinx.coroutines.launch
 
 @Composable
 fun ReadingScreen(
@@ -47,6 +49,8 @@ fun ReadingScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
     val catalogCache = remember(context) { CatalogCacheRepository(context) }
+    val scope = rememberCoroutineScope()
+    val chapterChecks = remember { mutableStateMapOf<String, String>() }
     fun search() { searchViewModel.search(query, novels, catalogCache) }
     LaunchedEffect(novels) { search() }
     val visibleSaved = library.filter { it.kind == if (novels) "NOVEL" else "MANGA" }
@@ -63,9 +67,10 @@ fun ReadingScreen(
         if (!novels) {
             TextButton(onClick = {
                 runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://mangaplus.shueisha.co.jp/"))) }
-            }) { Text("Browse official MANGA Plus catalog ↗", color = Violet, fontSize = 11.sp) }
+            }) { Text("Official reading • MANGA Plus ↗", color = Violet, fontSize = 11.sp) }
         }
-        if (!novels) Text("Searches MangaDex, AniList and Kitsu together • up to 150 unique titles", color = Muted, fontSize = 10.sp)
+        if (!novels) Text("Catalogs: AniList + Kitsu • Reader source: MangaDex • up to 150 unique titles", color = Muted, fontSize = 10.sp)
+            Text("MangaDex chapters are verified before showing Read Now. AniList and Kitsu provide catalog info only.", color = Muted, fontSize = 10.sp)
         OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(),
             placeholder = { Text(if (novels) "Search light novels…" else "Search manga…", color = Muted) },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Muted) },
@@ -90,7 +95,7 @@ fun ReadingScreen(
                         Column(Modifier.weight(1f)) {
                             Text(title.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
                             Text(title.format + " • " + title.readingStatus, color = Violet, fontSize = 10.sp)
-                            Text("Source: " + title.provider, color = Muted, fontSize = 10.sp)
+                            Text(if (title.provider == "MangaDex") "MangaDex • chapters not checked" else title.provider + " • catalog only", color = Muted, fontSize = 10.sp)
                             Text(title.progress.toString() + (title.chapters?.let { " / " + it } ?: "") + " chapters",
                                 color = Muted, fontSize = 10.sp)
                             Text(title.volumeProgress.toString() + (title.volumes?.let { " / " + it } ?: "") + " volumes",
@@ -152,7 +157,36 @@ fun ReadingScreen(
                         Text(title.format + " • " + (title.chapters?.let { it.toString() + " chapters" } ?: "Chapter count unknown"),
                             color = Muted, fontSize = 10.sp)
                         Text(title.volumes?.let { it.toString() + " volumes" } ?: "Volumes unknown", color = Muted, fontSize = 10.sp)
-                        Text("SOURCE • " + title.provider, color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text(if (title.provider == "MangaDex") "READER SOURCE • MANGADEX" else "CATALOG ONLY • " + title.provider, color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        if (title.provider == "MangaDex" && title.providerId.isNotBlank()) {
+                            val check = chapterChecks[title.providerId].orEmpty()
+                            when {
+                                check.startsWith("https://") -> TextButton(onClick = {
+                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(check))) }
+                                }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                                    Text("Read Now ↗", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                                check == "none" -> Text("No safe English chapters found", color = Muted, fontSize = 9.sp)
+                                else -> TextButton(
+                                    enabled = check != "checking",
+                                    onClick = {
+                                        chapterChecks[title.providerId] = "checking"
+                                        scope.launch {
+                                            chapterChecks[title.providerId] = runCatching {
+                                                MangaDexApi.firstEnglishSafeChapterUrl(title.providerId)
+                                            }.fold({ it ?: "none" }, { "error" })
+                                        }
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                ) {
+                                    Text(when (check) {
+                                        "checking" -> "Checking chapters…"
+                                        "error" -> "Retry chapter check"
+                                        else -> "Check chapters"
+                                    }, color = Violet, fontSize = 10.sp)
+                                }
+                            }
+                        }
                     }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         IconButton(onClick = { if (!saved) onAdd(title) }, enabled = !saved) {
