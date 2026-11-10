@@ -103,17 +103,15 @@ object AniListApi {
     suspend fun findByMalId(malId: Int): Anime? = withContext(Dispatchers.IO) {
         if (malId <= 0) return@withContext null
         val gql = """
-            query (${'
-                Media(idMal: ${'
+            query {
+                Media(idMal: $malId, type: ANIME) {
                     $FIELDS
                 }
             }
         """.trimIndent()
-        val media = request(gql, JSONObject().put("malId", malId))
-            .getJSONObject("data").optJSONObject("Media")
+        val media = request(gql, JSONObject()).getJSONObject("data").optJSONObject("Media")
         media?.let(::parseAnime)
     }
-
     suspend fun franchise(id: Int, maxTitles: Int = 80): FranchiseResult {
         val root = details(id)
         return franchise(id, root, maxTitles)
