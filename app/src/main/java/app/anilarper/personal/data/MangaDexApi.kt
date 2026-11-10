@@ -60,9 +60,10 @@ object MangaDexApi {
                             }
                         }
                     }
-                    val coverBase = coverFile.removeSuffix(".jpg").removeSuffix(".png")
-                    val cover = if (coverBase.isNotBlank())
-                        "https://uploads.mangadex.org/covers/$id/$coverBase.256.jpg"
+                    // MangaDex thumbnail URLs append the size suffix to the original
+                    // cover filename, including its extension (for example cover.jpg.256.jpg).
+                    val cover = if (coverFile.isNotBlank())
+                        "https://uploads.mangadex.org/covers/$id/$coverFile.256.jpg"
                     else ""
                     val status = attributes.optString("status", "UNKNOWN").replaceFirstChar { it.uppercase() }
                     val description = attributes.optJSONObject("description")?.optString("en").orEmpty()
