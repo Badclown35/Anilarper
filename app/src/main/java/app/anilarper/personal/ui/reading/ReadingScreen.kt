@@ -102,6 +102,35 @@ fun ReadingScreen(
                                 color = Muted, fontSize = 10.sp)
                             Text(title.volumeProgress.toString() + (title.volumes?.let { " / " + it } ?: "") + " volumes",
                                 color = Muted, fontSize = 10.sp)
+                            if (title.provider == "MangaDex" && title.providerId.isNotBlank()) {
+                                val check = chapterChecks[title.providerId].orEmpty()
+                                when {
+                                    check.startsWith("https://") -> TextButton(onClick = {
+                                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(check))) }
+                                    }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                                        Text("Read Now ↗", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    check == "none" -> Text("No safe English chapters found", color = Muted, fontSize = 9.sp)
+                                    else -> TextButton(
+                                        enabled = check != "checking",
+                                        onClick = {
+                                            chapterChecks[title.providerId] = "checking"
+                                            scope.launch {
+                                                chapterChecks[title.providerId] = runCatching {
+                                                    MangaDexApi.firstEnglishSafeChapterUrl(title.providerId)
+                                                }.fold({ it ?: "none" }, { "error" })
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                    ) {
+                                        Text(when (check) {
+                                            "checking" -> "Checking chapters…"
+                                            "error" -> "Retry chapter check"
+                                            else -> "Check chapters"
+                                        }, color = Violet, fontSize = 10.sp)
+                                    }
+                                }
+                            }
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             if (title.sourceUrl.isNotBlank()) {
