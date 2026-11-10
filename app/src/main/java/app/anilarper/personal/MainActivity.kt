@@ -66,6 +66,7 @@ private fun AnilarperApp() {
     val context = LocalContext.current
     val navController = rememberNavController()
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route ?: "Home"
+    var communityVideoFullscreen by remember { mutableStateOf(false) }
     val activity = context as ComponentActivity
     val collectionFactory = remember(context) { CollectionViewModelFactory(context.applicationContext) }
     val animeViewModel = remember(activity) {
@@ -92,7 +93,7 @@ private fun AnilarperApp() {
             modifier = Modifier.fillMaxSize(),
             containerColor = Color.Transparent,
             bottomBar = {
-                NavigationBar(
+                if (!communityVideoFullscreen) NavigationBar(
                     containerColor = Panel.copy(alpha = .96f),
                     tonalElevation = 0.dp,
                     modifier = Modifier.drawBehind {
@@ -135,7 +136,7 @@ private fun AnilarperApp() {
                 }
             }
         ) { padding ->
-            NavHost(navController = navController, startDestination = "Home", modifier = Modifier.padding(padding)) {
+            NavHost(navController = navController, startDestination = "Home", modifier = if (communityVideoFullscreen) Modifier.fillMaxSize() else Modifier.padding(padding)) {
                 composable("Home") {
                     HomeScreen(Modifier.fillMaxSize(), library,
                         onDiscover = { navController.navigate("Discover") { launchSingleTop = true } },
@@ -156,7 +157,7 @@ private fun AnilarperApp() {
                 composable("MALImport") { MalImportScreen({ animeViewModel.importAnime(it) }, Modifier.fillMaxSize()) }
                 composable("Schedule") { SeasonalScheduleScreen({ animeViewModel.toggle(it) }, library.map { it.id }.toSet(), Modifier.fillMaxSize()) }
                 composable("VideoPlayer") { LocalVideoPlayerScreen(Modifier.fillMaxSize()) }
-                composable("CommunityVideos") { CommunityVideosScreen(Modifier.fillMaxSize()) }
+                composable("CommunityVideos") { CommunityVideosScreen(Modifier.fillMaxSize(), onFullscreenChange = { communityVideoFullscreen = it }) }
                 composable("Library") {
                     LibraryScreen(Modifier.fillMaxSize(), library,
                         onRemove = { animeViewModel.remove(it) },
