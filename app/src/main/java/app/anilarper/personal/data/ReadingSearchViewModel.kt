@@ -30,26 +30,32 @@ class ReadingSearchViewModel : ViewModel() {
             _state.value = _state.value.copy(loading = true, error = null)
             val key = CatalogCacheRepository.readingKey(query, novels)
             try {
-                val (aniListResult, mangaDexResult) = coroutineScope {
+                val (aniListResult, mangaDexResult, kitsuResult) = coroutineScope {
                     val ani = async { runCatching { AniListReadingApi.search(query, novels) } }
                     val dex = async {
                         if (novels) Result.success(emptyList())
                         else runCatching { MangaDexApi.search(query) }
                     }
-                    ani.await() to dex.await()
+                    val kitsu = async {
+                        if (novels) Result.success(emptyList())
+                        else runCatching { KitsuMangaApi.search(query) }
+                    }
+                    Triple(ani.await(), dex.await(), kitsu.await())
                 }
                 val merged = mergeResults(
                     aniListResult.getOrDefault(emptyList()),
-                    mangaDexResult.getOrDefault(emptyList())
+                    mangaDexResult.getOrDefault(emptyList()),
+                    kitsuResult.getOrDefault(emptyList())
                 )
                 if (merged.isNotEmpty()) cacheRepository.saveReading(key, merged)
-                val failures = buildList {
+                val failed = buildList {
                     if (aniListResult.isFailure) add("AniList")
                     if (mangaDexResult.isFailure && !novels) add("MangaDex")
+                    if (kitsuResult.isFailure && !novels) add("Kitsu")
                 }
                 val message = when {
-                    failures.size == 2 -> "Both catalogs are unavailable. Showing saved results if available."
-                    failures.isNotEmpty() -> "${failures.joinToString()} unavailable — showing results from the other source."
+                    failed.size == 3 -> "All catalogs are unavailable. Showing saved results if available."
+                    failed.isNotEmpty() -> "${failed.joinToString()} unavailable — showing results from the other sources."
                     else -> null
                 }
                 if (merged.isNotEmpty()) {
@@ -74,25 +80,34 @@ class ReadingSearchViewModel : ViewModel() {
         }
     }
 
-    private fun mergeResults(aniList: List<ReadingTitle>, mangaDex: List<ReadingTitle>): List<ReadingTitle> {
+    private fun mergeResults(
+        aniList: List<ReadingTitle>,
+        mangaDex: List<ReadingTitle>,
+        kitsu: List<ReadingTitle>
+    ): List<ReadingTitle> {
         val merged = LinkedHashMap<String, ReadingTitle>()
-        (aniList + mangaDex).forEach { title ->
-            val normalized = title.title.lowercase()
-                .replace(Regex("[^\\p{L}\\p{N}]"), "")
+        (aniList + mangaDex + kitsu).forEach { title ->
+            val normalized = title.title.lowercase().replace(Regex("[^\\p{L}\\p{N}]"), "")
             val key = normalized.ifBlank { "${title.provider}:${title.providerId}" }
             val existing = merged[key]
-            // Prefer MangaDex when it provides a source page, while retaining AniList's richer counts when possible.
+            // Prefer MangaDex for its source link, then Kitsu, while keeping AniList's metadata where available.
             merged[key] = when {
                 existing == null -> title
                 existing.provider == "MangaDex" -> existing
                 title.provider == "MangaDex" -> title.copy(
-                    chapters = existing.chapters,
-                    volumes = existing.volumes,
+                    chapters = existing.chapters ?: title.chapters,
+                    volumes = existing.volumes ?: title.volumes,
+                    description = title.description.ifBlank { existing.description }
+                )
+                existing.provider == "Kitsu" -> existing
+                title.provider == "Kitsu" -> title.copy(
+                    chapters = existing.chapters ?: title.chapters,
+                    volumes = existing.volumes ?: title.volumes,
                     description = title.description.ifBlank { existing.description }
                 )
                 else -> existing
             }
         }
-        return merged.values.take(100)
+        return merged.values.take(150)
     }
 }
