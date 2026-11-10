@@ -34,6 +34,15 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
+private fun isPrivateLanHost(host: String): Boolean {
+    if (host == "localhost" || host.endsWith(".local", ignoreCase = true)) return true
+    val octets = host.split(".").mapNotNull(String::toIntOrNull)
+    if (octets.size != 4 || octets.any { it !in 0..255 }) return false
+    val (a, b) = octets
+    return a == 10 || a == 127 || (a == 192 && b == 168) ||
+        (a == 172 && b in 16..31) || (a == 169 && b == 254)
+}
+
 private data class SharedVideo(val id: String, val title: String, val category: String, val size: Long, val streamPath: String)
 
 @Composable
@@ -56,9 +65,11 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
     fun connect() {
         val normalized = serverAddress.trim().trimEnd('/')
         val parsedAddress = runCatching { URL(normalized) }.getOrNull()
-        if (parsedAddress?.protocol != "https" || parsedAddress.host.isBlank() ||
+        val secureHttps = parsedAddress?.protocol == "https"
+        val privateLanHttp = parsedAddress?.protocol == "http" && isPrivateLanHost(parsedAddress.host)
+        if ((!secureHttps && !privateLanHttp) || parsedAddress?.host.isNullOrBlank() ||
             parsedAddress.userInfo != null || parsedAddress.query != null || parsedAddress.ref != null) {
-            status = "Enter a valid HTTPS server address without credentials, query parameters, or fragments."
+            status = "Use HTTPS for remote servers, or HTTP only for a private LAN address (10.x, 192.168.x, 172.16–31.x, or .local)."
             return
         }
         scope.launch {
@@ -92,7 +103,8 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
                 prefs.edit().putString("server_url", normalized).apply()
                 connectedAddress = normalized
                 videos = result
-                status = if (result.isEmpty()) "Connected. No shared videos yet." else "Connected • ${result.size} video(s)"
+                status = (if (result.isEmpty()) "Connected. No shared videos yet." else "Connected • ${result.size} video(s)") +
+                    if (privateLanHttp) " • Local network only (HTTP)" else ""
             } catch (e: Exception) {
                 videos = emptyList()
                 status = "Couldn't connect: ${e.message ?: "Check the address and server."}"
@@ -106,12 +118,12 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
     ) {
         Text("COMMUNITY", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp)
         Text("Shared videos", color = White, fontSize = 27.sp, fontWeight = FontWeight.ExtraBold)
-        Text("Browse videos hosted by the Anilarper community server.", color = Muted, fontSize = 12.sp)
+        Text("Browse videos hosted by the Anilarper community server. Local HTTP works only on your private Wi-Fi; use HTTPS for remote sharing.", color = Muted, fontSize = 12.sp)
         OutlinedTextField(
             value = serverAddress,
             onValueChange = { serverAddress = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Secure server address (https://…)") },
+            label = { Text("Server address (HTTPS or local HTTP)") },
             singleLine = true,
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = White, unfocusedTextColor = White,
