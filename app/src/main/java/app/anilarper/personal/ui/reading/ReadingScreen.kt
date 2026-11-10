@@ -60,6 +60,11 @@ fun ReadingScreen(
             FilterChip(selected = !novels, onClick = { novels = false }, label = { Text("Manga") })
             FilterChip(selected = novels, onClick = { novels = true }, label = { Text("Light novels") })
         }
+        if (!novels) {
+            TextButton(onClick = {
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://mangaplus.shueisha.co.jp/"))) }
+            }) { Text("Browse official MANGA Plus catalog ↗", color = Violet, fontSize = 11.sp) }
+        }
         OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(),
             placeholder = { Text(if (novels) "Search light novels…" else "Search manga…", color = Muted) },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Muted) },
