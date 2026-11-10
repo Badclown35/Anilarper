@@ -9,7 +9,7 @@ class MemoryS3 {
   }
   async fetch(input, init = {}) {
     const url = new URL(input);
-    const path = decodeURIComponent(url.pathname.replace(/^\\/[^/]+\\//, ""));
+    const path = decodeURIComponent(url.pathname.replace(/^\/[^/]+\//, ""));
     const query = url.searchParams;
     const method = init.method || "GET";
     if (method === "POST" && url.search === "?uploads") {
@@ -30,7 +30,7 @@ class MemoryS3 {
       const session = this.sessions.get(uploadId);
       if (!session || session.key !== path) return new Response("missing", { status: 404 });
       const xml = String(init.body || "");
-      const numbers = [...xml.matchAll(/<PartNumber>(\\d+)<\\/PartNumber>/g)].map(m => Number(m[1]));
+      const numbers = [...xml.matchAll(/<PartNumber>(\d+)<\/PartNumber>/g)].map(m => Number(m[1]));
       const chunks = numbers.map(n => session.parts.get(n));
       if (chunks.some(x => !x)) return new Response("missing part", { status: 400 });
       this.objects.set(path, new Uint8Array(await new Blob(chunks).arrayBuffer()));
@@ -59,7 +59,7 @@ class MemoryS3 {
     if (method === "HEAD") return new Response(null, { status: 200, headers });
     const range = new Headers(init.headers || {}).get("Range");
     if (range) {
-      const match = /^bytes=(\\d*)-(\\d*)$/.exec(range);
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
       if (!match) return new Response(null, { status: 416 });
       const start = Number(match[1] || 0);
       const end = match[2] ? Math.min(Number(match[2]), bytes.length - 1) : bytes.length - 1;
