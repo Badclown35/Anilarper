@@ -259,6 +259,7 @@ fun ReadingScreen(
                 }
                 }
             }
+            }
             item {
                 SourceGroupHeader("CATALOGS & DATABASES", "${catalogResults.size} results • AniList + Kitsu", catalogGroupExpanded || novels) {
                     catalogGroupExpanded = !catalogGroupExpanded
