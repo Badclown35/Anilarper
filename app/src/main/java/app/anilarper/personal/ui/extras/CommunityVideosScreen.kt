@@ -56,7 +56,7 @@ private data class SharedVideo(val id: String, val title: String, val category: 
 fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("anilarper_media", Context.MODE_PRIVATE) }
-    var serverAddress by remember { mutableStateOf(prefs.getString("server_url", "") ?: "") }
+    var serverAddress by remember { mutableStateOf(prefs.getString("server_url", "https://anilarper-media-worker.dywone659.workers.dev") ?: "https://anilarper-media-worker.dywone659.workers.dev") }
     var connectedAddress by remember { mutableStateOf("") }
     var videos by remember { mutableStateOf<List<SharedVideo>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
@@ -198,6 +198,8 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
             } finally { loading = false }
         }
     }
+
+    LaunchedEffect(Unit) { connect() }
 
     if (fullscreen && selected != null) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
