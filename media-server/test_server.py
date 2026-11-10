@@ -96,6 +96,32 @@ class PhoneServerTests(unittest.TestCase):
             self.request("/api/videos/public.mp4", method="DELETE")
         self.assertEqual(error.exception.code, 401)
 
+    def test_new_upload_is_private_even_if_stale_metadata_was_public(self):
+        metadata = server.read_metadata()
+        metadata["fresh.mp4"] = {"title": "Old entry", "category": "Clips", "visibility": "public"}
+        server.write_metadata(metadata)
+        request = Request(
+            self.base + "/api/upload?name=fresh.mp4&title=Fresh&category=Clips",
+            data=b"new-video", headers={"Authorization": "Bearer " + server.TOKEN},
+            method="POST")
+        response = urlopen(request)
+        self.assertEqual(response.status, 201)
+        result = json.loads(response.read())
+        self.assertEqual(result["visibility"], "private")
+        with self.assertRaises(HTTPError) as error:
+            self.request("/media/fresh.mp4")
+        self.assertEqual(error.exception.code, 404)
+
+    def test_upload_can_be_explicitly_published(self):
+        request = Request(
+            self.base + "/api/upload?name=shared.mp4&publish=true",
+            data=b"shared-video", headers={"Authorization": "Bearer " + server.TOKEN},
+            method="POST")
+        response = urlopen(request)
+        self.assertEqual(response.status, 201)
+        payload = json.loads(self.request("/api/videos").read())
+        self.assertIn("shared.mp4", [v["id"] for v in payload["videos"]])
+
 
 if __name__ == "__main__":
     unittest.main()
