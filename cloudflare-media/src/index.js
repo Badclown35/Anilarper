@@ -162,6 +162,12 @@ async function handleApi(request, env, url) {
     }
     const upload = env.MEDIA_BUCKET.resumeMultipartUpload(pending.key, pending.uploadId);
     const object = await upload.complete(parts);
+    if (object.size !== pending.size) {
+      await env.MEDIA_BUCKET.delete(pending.key);
+      catalog.pending = catalog.pending.filter(function(p) { return p.id !== pending.id; });
+      await writeCatalog(env.MEDIA_BUCKET, catalog);
+      return json({ error: "Uploaded size did not match the reserved size; the incomplete object was removed." }, 400);
+    }
     catalog.pending = catalog.pending.filter(function(p) { return p.id !== pending.id; });
     catalog.videos.push({ id: pending.id, title: pending.title, category: pending.category, size: object.size, modified: Date.now() });
     await writeCatalog(env.MEDIA_BUCKET, catalog);
