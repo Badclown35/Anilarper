@@ -30,7 +30,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -225,8 +224,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                 }
                 Box {
                     TextButton(onClick = { speedMenu = true }, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
-                        Icon(Icons.Default.Speed, contentDescription = null)
-                        Text(" ${playbackSpeed}×")
+                        Text("SPEED ${playbackSpeed}×")
                     }
                     DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
                         listOf(0.75f, 1f, 1.25f, 1.5f, 2f).forEach { speed ->
@@ -334,8 +332,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                 Spacer(Modifier.weight(1f))
                 Box {
                     TextButton(onClick = { speedMenu = true }) {
-                        Icon(Icons.Default.Speed, contentDescription = null, tint = Violet)
-                        Text(" ${playbackSpeed}×", color = Violet)
+                        Text("SPEED ${playbackSpeed}×", color = Violet)
                     }
                     DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
                         listOf(0.75f, 1f, 1.25f, 1.5f, 2f).forEach { speed ->
@@ -351,7 +348,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
         if (videos.isNotEmpty()) {
             var sortExpanded by remember { mutableStateOf(false) }
             Box {
-                TextButton(onClick = { sortExpanded = true }) { Text("Sort: $sortMode", color = Violet); Icon(Icons.Default.ExpandMore, contentDescription = null, tint = Violet) }
+                TextButton(onClick = { sortExpanded = true }) { Text("Sort: $sortMode  ⌄", color = Violet) }
                 DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
                     listOf("Recently added", "Title A–Z", "Largest first", "Smallest first").forEach { option ->
                         DropdownMenuItem(text = { Text(option) }, onClick = { sortMode = option; sortExpanded = false })
