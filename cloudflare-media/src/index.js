@@ -114,7 +114,7 @@ async function streamMedia(request, env, id) {
   const headers = {};
   const range = request.headers.get("Range");
   if (range) {
-    const match = /^bytes=(\\d*)-(\\d*)$/.exec(range.trim());
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
     if (!match || (!match[1] && !match[2])) {
       return respond(null, 416, { "Content-Range": "bytes */" + video.size, "Accept-Ranges": "bytes" });
     }
