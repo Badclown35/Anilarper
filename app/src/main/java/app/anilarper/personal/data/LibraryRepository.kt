@@ -81,7 +81,8 @@ class LibraryRepository(context: Context) {
         o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0), o.optLong("lastWatchedAt", 0L),
         o.optString("season"),
         if (!o.has("seasonYear") || o.isNull("seasonYear")) null else o.optInt("seasonYear"),
-        o.optJSONArray("genres").toStrings(), o.optJSONArray("studios").toStrings()
+        o.optJSONArray("genres").toStrings(), o.optJSONArray("studios").toStrings(),
+        isFavorite = o.optBoolean("isFavorite", false)
     )
 
     private fun parseReading(o: JSONObject) = ReadingTitle(
@@ -100,6 +101,7 @@ class LibraryRepository(context: Context) {
         .put("watchStatus", watchStatus).put("progress", progress).put("lastWatchedAt", lastWatchedAt)
         .put("season", season).put("seasonYear", seasonYear)
         .put("genres", JSONArray(genres)).put("studios", JSONArray(studios))
+        .put("isFavorite", isFavorite)
 
     private fun ReadingTitle.toJson() = JSONObject()
         .put("id", id).put("title", title).put("nativeTitle", nativeTitle)
@@ -118,7 +120,8 @@ class LibraryRepository(context: Context) {
                 o.optString("watchStatus", "PLANNING"), o.optInt("progress", 0), o.optLong("lastWatchedAt", 0L),
                 o.optString("season"),
                 if (!o.has("seasonYear") || o.isNull("seasonYear")) null else o.optInt("seasonYear"),
-                o.optJSONArray("genres").toStrings(), o.optJSONArray("studios").toStrings()
+                o.optJSONArray("genres").toStrings(), o.optJSONArray("studios").toStrings(),
+                isFavorite = o.optBoolean("isFavorite", false)
             )
         }.getOrNull()
     } ?: emptyList()
@@ -133,7 +136,7 @@ class LibraryRepository(context: Context) {
                 .put("watchStatus", anime.watchStatus).put("progress", anime.progress)
                 .put("lastWatchedAt", anime.lastWatchedAt).put("season", anime.season)
                 .put("seasonYear", anime.seasonYear).put("genres", JSONArray(anime.genres))
-                .put("studios", JSONArray(anime.studios)))
+                .put("studios", JSONArray(anime.studios)).put("isFavorite", anime.isFavorite))
         }
         check(preferences.edit().putString("library", array.toString()).commit()) {
             "Couldn't save anime library."

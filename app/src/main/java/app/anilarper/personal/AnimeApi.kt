@@ -28,7 +28,8 @@ data class Anime(
     val relations: List<AnimeRelation> = emptyList(),
     val romajiTitle: String = "",
     val synonyms: List<String> = emptyList(),
-    val malId: Int? = null
+    val malId: Int? = null,
+    val isFavorite: Boolean = false
 )
 
 data class AnimePage(val items: List<Anime>, val page: Int, val hasNextPage: Boolean)

@@ -16,6 +16,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,10 +53,21 @@ internal fun AnimeRow(anime: Anime, saved: Boolean, onClick: () -> Unit) {
 fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, onRemove: (Anime) -> Unit, onUpdate: (Anime) -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     var statusFilter by rememberSaveable { mutableStateOf("ALL") }
+    var sortMode by rememberSaveable { mutableStateOf("Recently updated") }
+    var sortExpanded by remember { mutableStateOf(false) }
+    var favoritesOnly by rememberSaveable { mutableStateOf(false) }
     val filters = listOf("ALL", "WATCHING", "PLANNING", "COMPLETED", "PAUSED", "DROPPED")
-    val visible = library.filter { anime ->
+    val filtered = library.filter { anime ->
         (statusFilter == "ALL" || anime.watchStatus == statusFilter) &&
-            (query.isBlank() || anime.title.contains(query, ignoreCase = true))
+            (!favoritesOnly || anime.isFavorite) &&
+            (query.isBlank() || anime.title.contains(query, ignoreCase = true) || anime.nativeTitle.contains(query, ignoreCase = true) || anime.genres.any { it.contains(query, ignoreCase = true) })
+    }
+    val visible = when (sortMode) {
+        "Favorites first" -> filtered.sortedWith(compareByDescending<Anime> { it.isFavorite }.thenBy { it.title.lowercase() })
+        "Title A–Z" -> filtered.sortedBy { it.title.lowercase() }
+        "Highest score" -> filtered.sortedByDescending { it.score ?: -1 }
+        "Most episodes watched" -> filtered.sortedByDescending { it.progress }
+        else -> filtered.sortedByDescending { it.lastWatchedAt }
     }
     val watching = library.count { it.watchStatus == "WATCHING" }
     val completed = library.count { it.watchStatus == "COMPLETED" }
@@ -107,6 +119,28 @@ fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, onRemove:
             Spacer(Modifier.weight(1f))
             Text("Tap + / − to update episodes", color = Muted, fontSize = 10.sp)
         }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("SORT BY", color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .8.sp)
+            Spacer(Modifier.width(6.dp))
+            Box {
+                TextButton(onClick = { sortExpanded = true }, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)) {
+                    Text(sortMode, color = Violet, fontSize = 11.sp)
+                    Icon(Icons.Default.ExpandMore, contentDescription = null, tint = Violet)
+                }
+                DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
+                    listOf("Recently updated", "Favorites first", "Title A–Z", "Highest score", "Most episodes watched").forEach { option ->
+                        DropdownMenuItem(text = { Text(option) }, onClick = { sortMode = option; sortExpanded = false })
+                    }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            Text("Search also checks genres", color = Muted, fontSize = 9.sp)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            FilterChip(selected = favoritesOnly, onClick = { favoritesOnly = !favoritesOnly },
+                label = { Text("★ Favorites only", fontSize = 10.sp) },
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Violet.copy(alpha = .18f), selectedLabelColor = Violet, labelColor = Muted))
+        }
         Spacer(Modifier.height(7.dp))
         if (visible.isEmpty()) {
             Column(
@@ -151,6 +185,11 @@ fun LibraryScreen(modifier: Modifier = Modifier, library: List<Anime>, onRemove:
                                 if (anime.episodes != null && anime.episodes > 0) {
                                     GradientProgress((anime.progress.toFloat() / anime.episodes).coerceIn(0f, 1f), Modifier.fillMaxWidth())
                                 }
+                            }
+                            IconButton(onClick = { onUpdate(anime.copy(isFavorite = !anime.isFavorite)) }) {
+                                Icon(if (anime.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                                    contentDescription = if (anime.isFavorite) "Remove ${anime.title} from favorites" else "Add ${anime.title} to favorites",
+                                    tint = if (anime.isFavorite) Color(0xFFFFD36A) else Muted)
                             }
                             IconButton(onClick = { onRemove(anime) }) {
                                 Icon(Icons.Default.BookmarkRemove, contentDescription = "Remove ${anime.title}", tint = Muted)

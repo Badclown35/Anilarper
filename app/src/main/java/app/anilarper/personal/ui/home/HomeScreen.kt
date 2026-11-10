@@ -41,6 +41,7 @@ fun HomeScreen(
 ) {
     val watching = library.filter { it.watchStatus == "WATCHING" }.sortedByDescending { it.lastWatchedAt }
     val completed = library.filter { it.watchStatus == "COMPLETED" }.sortedByDescending { it.lastWatchedAt }
+    val favorites = library.filter { it.isFavorite }.sortedBy { it.title.lowercase() }
     val featured = watching.firstOrNull() ?: library.firstOrNull()
     val heroShape = RoundedCornerShape(28.dp)
     Column(
@@ -176,6 +177,23 @@ fun HomeScreen(
                             PosterImage(anime.cover, anime.title, Modifier.fillMaxWidth().height(158.dp), corner = 16.dp)
                             Text(anime.title, color = White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
                             Pill("COMPLETED", color = Aqua)
+                        }
+                    }
+                }
+            }
+        }
+        // ── Favorites ─────────────────────────────────────────────────────────
+        if (favorites.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SectionTitle("Your favorites", "The titles you marked to keep close", "Library", onOpenLibrary)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    favorites.take(10).forEach { anime ->
+                        Column(Modifier.width(118.dp).clickable { onOpenLibrary() }, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                            Box {
+                                PosterImage(anime.cover, anime.title, Modifier.fillMaxWidth().height(158.dp), corner = 16.dp)
+                                Icon(Icons.Default.Star, contentDescription = "Favorite", tint = Color(0xFFFFD36A), modifier = Modifier.align(Alignment.TopEnd).padding(8.dp))
+                            }
+                            Text(anime.title, color = White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
                         }
                     }
                 }

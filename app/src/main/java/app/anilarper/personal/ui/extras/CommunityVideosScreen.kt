@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -61,6 +62,12 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
     var videos by remember { mutableStateOf<List<SharedVideo>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("All") }
+    var sortMode by remember { mutableStateOf("Recently added") }
+    var usedBytes by remember { mutableLongStateOf(0L) }
+    var pendingBytes by remember { mutableLongStateOf(0L) }
+    var maxBytes by remember { mutableLongStateOf(10_000_000_000L) }
+    var speedMenu by remember { mutableStateOf(false) }
+    var playbackSpeed by remember { mutableFloatStateOf(1f) }
     var status by remember { mutableStateOf("Enter the secure server address to browse shared videos.") }
     var loading by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<SharedVideo?>(null) }
@@ -149,7 +156,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
             loading = true
             status = "Connecting…"
             try {
-                val result = withContext(Dispatchers.IO) {
+                val catalogResult = withContext(Dispatchers.IO) {
                     val connection = (URL("$normalized/api/videos").openConnection() as HttpURLConnection)
                     connection.connectTimeout = 10000
                     connection.readTimeout = 15000
@@ -158,8 +165,11 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                     try {
                         if (connection.responseCode !in 200..299) error("Server returned HTTP ${connection.responseCode}")
                         val body = connection.inputStream.bufferedReader().use { it.readText() }
-                        val array = JSONObject(body).optJSONArray("videos") ?: org.json.JSONArray()
-                        buildList {
+                        val responseJson = JSONObject(body)
+                val storageJson = responseJson.optJSONObject("storage")
+                val storage = Triple(storageJson?.optLong("usedBytes", 0L) ?: 0L, storageJson?.optLong("pendingBytes", 0L) ?: 0L, storageJson?.optLong("maxBytes", 10_000_000_000L) ?: 10_000_000_000L)
+                val array = responseJson.optJSONArray("videos") ?: org.json.JSONArray()
+                        val parsedVideos = buildList {
                             for (i in 0 until array.length()) {
                                 val item = array.optJSONObject(i) ?: continue
                                 val id = item.optString("id")
@@ -171,8 +181,13 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                                 }
                             }
                         }
+                        Pair(parsedVideos, storage)
                     } finally { connection.disconnect() }
                 }
+                usedBytes = catalogResult.second.first.coerceAtLeast(0L)
+                pendingBytes = catalogResult.second.second.coerceAtLeast(0L)
+                maxBytes = catalogResult.second.third.coerceAtLeast(1L)
+                val result = catalogResult.first
                 prefs.edit().putString("server_url", normalized).apply()
                 connectedAddress = normalized
                 videos = result
@@ -198,11 +213,36 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                 update = { it.player = player },
                 modifier = Modifier.fillMaxSize()
             )
-            TextButton(
-                onClick = { fullscreen = false },
-                modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
-                colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
-            ) { Text("EXIT FULLSCREEN") }
+            Row(
+                modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = { player.seekBack() }, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
+                    Text("−10")
+                }
+                TextButton(onClick = { player.seekForward() }, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
+                    Text("+10")
+                }
+                Box {
+                    TextButton(onClick = { speedMenu = true }, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
+                        Icon(Icons.Default.Speed, contentDescription = null)
+                        Text(" ${playbackSpeed}×")
+                    }
+                    DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
+                        listOf(0.75f, 1f, 1.25f, 1.5f, 2f).forEach { speed ->
+                            DropdownMenuItem(text = { Text("${speed}×") }, onClick = {
+                                playbackSpeed = speed
+                                player.setPlaybackSpeed(speed)
+                                speedMenu = false
+                            })
+                        }
+                    }
+                }
+                TextButton(
+                    onClick = { fullscreen = false },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+                ) { Text("EXIT") }
+            }
         }
     } else Column(
         modifier.fillMaxSize().background(Ink).padding(16.dp),
@@ -239,6 +279,25 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
             }
         }
         Text(status, color = Muted, fontSize = 12.sp)
+        if (connectedAddress.isNotBlank()) {
+            val totalUsed = (usedBytes + pendingBytes).coerceAtLeast(0L)
+            val fraction = (totalUsed.toFloat() / maxBytes.toFloat()).coerceIn(0f, 1f)
+            Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp)).padding(13.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("COMMUNITY STORAGE", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    Spacer(Modifier.weight(1f))
+                    Text(String.format("%.1f%%", fraction * 100f), color = if (fraction >= .85f) Color(0xFFFFB86B) else White,
+                        fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+                LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth(),
+                    color = if (fraction >= .85f) Color(0xFFFFB86B) else Violet, trackColor = Panel2)
+                Text(String.format("%.2f / %.2f GB • %.2f GB pending", totalUsed / 1e9, maxBytes / 1e9, pendingBytes / 1e9),
+                    color = Muted, fontSize = 10.sp)
+                if (fraction >= .95f) Text("Almost full — remove unused videos before uploading more.", color = Color(0xFFFFB86B), fontSize = 11.sp)
+                else if (fraction >= .85f) Text("Storage is getting low. Check the library before your next upload.", color = Color(0xFFFFB86B), fontSize = 11.sp)
+            }
+        }
         val resumeVideo = videos.firstOrNull { it.id == lastWatchedId }
         val savedPosition = prefs.getLong("last_video_position", 0L)
         if (resumeVideo != null && savedPosition > 0L) {
@@ -269,8 +328,37 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                 update = { it.player = player },
                 modifier = Modifier.fillMaxWidth().height(210.dp).background(Color.Black, RoundedCornerShape(12.dp))
             )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { player.seekBack() }) { Text("−10 sec", color = Violet) }
+                TextButton(onClick = { player.seekForward() }) { Text("+10 sec", color = Violet) }
+                Spacer(Modifier.weight(1f))
+                Box {
+                    TextButton(onClick = { speedMenu = true }) {
+                        Icon(Icons.Default.Speed, contentDescription = null, tint = Violet)
+                        Text(" ${playbackSpeed}×", color = Violet)
+                    }
+                    DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
+                        listOf(0.75f, 1f, 1.25f, 1.5f, 2f).forEach { speed ->
+                            DropdownMenuItem(text = { Text("${speed}×") }, onClick = {
+                                playbackSpeed = speed; player.setPlaybackSpeed(speed); speedMenu = false
+                            })
+                        }
+                    }
+                }
+            }
         }
         Text("VIDEO LIBRARY", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
+        if (videos.isNotEmpty()) {
+            var sortExpanded by remember { mutableStateOf(false) }
+            Box {
+                TextButton(onClick = { sortExpanded = true }) { Text("Sort: $sortMode", color = Violet); Icon(Icons.Default.ExpandMore, contentDescription = null, tint = Violet) }
+                DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
+                    listOf("Recently added", "Title A–Z", "Largest first", "Smallest first").forEach { option ->
+                        DropdownMenuItem(text = { Text(option) }, onClick = { sortMode = option; sortExpanded = false })
+                    }
+                }
+            }
+        }
         if (videos.isNotEmpty()) {
             OutlinedTextField(
                 value = searchQuery,
@@ -293,9 +381,15 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                 }
             }
         }
-        val visibleVideos = videos.filter { video ->
+        val filteredVideos = videos.filter { video ->
             (selectedCategory == "All" || video.category == selectedCategory) &&
                 (searchQuery.isBlank() || (video.title + " " + video.id + " " + video.category).contains(searchQuery.trim(), ignoreCase = true))
+        }
+        val visibleVideos = when (sortMode) {
+            "Title A–Z" -> filteredVideos.sortedBy { it.title.lowercase() }
+            "Largest first" -> filteredVideos.sortedByDescending { it.size }
+            "Smallest first" -> filteredVideos.sortedBy { it.size }
+            else -> filteredVideos
         }
         if (videos.isEmpty()) {
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
