@@ -21,6 +21,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Install Worker dependencies
+        working-directory: cloudflare-media
+        run: npm install --no-audit --no-fund
       - name: Run Worker API tests
         working-directory: cloudflare-media
         run: npm test
