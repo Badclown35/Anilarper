@@ -42,6 +42,7 @@ class MemoryBucket {
   multipart(key, uploadId) {
     const bucket = this;
     return {
+      uploadId: uploadId,
       async uploadPart(number, stream) {
         const session = bucket.sessions.get(uploadId);
         const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
