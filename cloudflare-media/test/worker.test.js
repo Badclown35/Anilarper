@@ -184,3 +184,51 @@ test("storage cap rejects new uploads and admin can edit/delete", async () => {
   assert.equal(del.status, 200);
   assert.equal((await (await worker.fetch(request("/api/videos"), e)).json()).videos.length, 0);
 });
+
+test("phone catalog is merged and phone media redirects without proxying video bytes", async () => {
+  const e = env();
+  e.PHONE_STORAGE_URL = "https://phone-test.trycloudflare.com";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    assert.equal(String(url), "https://phone-test.trycloudflare.com/api/videos");
+    return new Response(JSON.stringify({
+      videos: [{ id: "episode 1.mp4", title: "Phone Episode", category: "Anime", size: 123, modified: 10 }],
+      storage: { usedBytes: 123, pendingBytes: 0, maxBytes: 5000 }
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    const response = await worker.fetch(request("/api/videos"), e);
+    const data = await response.json();
+    assert.equal(data.videos.length, 1);
+    assert.equal(data.videos[0].provider, "phone");
+    assert.equal(data.videos[0].id, "phone__episode 1.mp4");
+    assert.equal(data.videos[0].streamPath, "/media/phone__episode%201.mp4");
+    assert.equal(data.storage.usedBytes, 123);
+    assert.equal(data.storage.providers.phone.online, true);
+
+    const redirect = await worker.fetch(request(data.videos[0].streamPath, {
+      headers: { Range: "bytes=0-10" }
+    }), e);
+    assert.equal(redirect.status, 307);
+    assert.equal(redirect.headers.get("Location"), "https://phone-test.trycloudflare.com/media/episode%201.mp4");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("phone outage does not hide the existing B2 catalog", async () => {
+  const e = env();
+  e.PHONE_STORAGE_URL = "https://phone-test.trycloudflare.com";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("phone offline"); };
+  try {
+    const response = await worker.fetch(request("/api/videos"), e);
+    const data = await response.json();
+    assert.deepEqual(data.videos, []);
+    assert.equal(data.storage.providers.b2.online, true);
+    assert.equal(data.storage.providers.phone.online, false);
+    assert.equal(data.storage.maxBytes, 10_000_000_000);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
