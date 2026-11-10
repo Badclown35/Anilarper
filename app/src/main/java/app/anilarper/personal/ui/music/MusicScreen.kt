@@ -196,6 +196,34 @@ fun MusicScreen(modifier: Modifier = Modifier) {
                 }
             }
         }
+        OnlineMusicDiscovery(
+            onPlay = { url, title ->
+                val controller = player
+                if (controller == null) {
+                    message = "Connecting to the audio service…"
+                } else {
+                    val item = MediaItem.Builder()
+                        .setMediaId(url)
+                        .setUri(Uri.parse(url))
+                        .setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
+                        .build()
+                    controller.setMediaItem(item)
+                    controller.prepare()
+                    controller.play()
+                    message = "Streaming openly licensed audio."
+                }
+            },
+            onSave = { url, title ->
+                val track = LocalTrack(url, title)
+                if (savedTracks.none { it.uri == url }) {
+                    savedTracks = savedTracks + track
+                    tracks = if (shuffle) savedTracks.shuffled() else savedTracks
+                    persistTracks(context, savedTracks)
+                    message = "Saved to your music library."
+                } else message = "Already in your music library."
+            }
+        )
+        Spacer(Modifier.height(4.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp),
             contentPadding = PaddingValues(bottom = 20.dp), modifier = Modifier.weight(1f)) {
             if (links.isNotEmpty()) {
@@ -218,7 +246,7 @@ fun MusicScreen(modifier: Modifier = Modifier) {
                 }
             }
             if (tracks.isNotEmpty()) {
-                item { Text("LOCAL AUDIO FILES", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
+                item { Text("MY MUSIC LIBRARY", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
                 items(tracks, key = { it.uri }) { track ->
                     Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(13.dp)).clickable {
                         val controller = player
@@ -262,7 +290,7 @@ fun MusicScreen(modifier: Modifier = Modifier) {
             Row(Modifier.fillMaxWidth().background(Panel2, RoundedCornerShape(14.dp)).padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(if (preparing) "PREPARING · LOCAL AUDIO" else "NOW PLAYING · LOCAL", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text(if (preparing) "PREPARING AUDIO" else "NOW PLAYING", color = Violet, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                     Text(tracks.firstOrNull { it.uri == current }?.title ?: "Audio track", color = White, fontSize = 12.sp, maxLines = 1)
                 }
                 IconButton(onClick = { playAdjacent(-1) }, enabled = player?.hasPreviousMediaItem() == true) {
