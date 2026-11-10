@@ -22,8 +22,11 @@ TOKEN = TOKEN_FILE.read_text(encoding="utf-8").strip()
 if len(TOKEN) < 32: raise RuntimeError("Invalid admin token. Remove .admin_token and restart.")
 
 def read_metadata():
-    try: return json.loads(META_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError): return {}
+    try:
+        value = json.loads(META_FILE.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 def clean_text(value, limit=100):
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
@@ -54,10 +57,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"ok": True, "server": "AnilarperMedia", "version": 1}); return
         if path == "/api/videos":
             videos = []
+            metadata = read_metadata()
             for f in sorted(MEDIA.glob("*.mp4"), key=lambda p: p.name.lower()):
                 if f.is_file():
                     st = f.stat()
-                    meta = read_metadata().get(f.name, {})
+                    meta = metadata.get(f.name, {})
                     videos.append({"id": f.name, "title": clean_text(meta.get("title")) or f.stem,
                                    "category": clean_text(meta.get("category")) or "Uncategorized", "size": st.st_size,
                                    "modified": int(st.st_mtime), "streamPath": "/media/" + f.name})
