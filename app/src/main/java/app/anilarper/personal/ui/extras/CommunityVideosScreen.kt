@@ -1,6 +1,7 @@
 package app.anilarper.personal.ui.extras
 
 import android.app.Activity
+import androidx.activity.compose.BackHandler
 import android.content.Context
 import android.content.pm.ActivityInfo
 import androidx.core.view.WindowInsetsCompat
@@ -67,6 +68,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
     val originalOrientation = remember(activity) { activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
 
     LaunchedEffect(fullscreen) { onFullscreenChange(fullscreen) }
+    BackHandler(enabled = fullscreen) { fullscreen = false }
     DisposableEffect(fullscreen, activity) {
         val window = activity?.window
         val bars = if (window != null) WindowInsetsControllerCompat(window, window.decorView) else null
