@@ -32,105 +32,72 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 
-/** Default rounded shape for cards across the app. */
 internal val CardShape = RoundedCornerShape(20.dp)
-
-/** Gradient accent used for bars, borders and glows (follows the user's accent color). */
 @Composable
 internal fun accentBrush(): Brush = Brush.horizontalGradient(listOf(Violet, Sakura))
 
-/**
- * Anime-style card surface: soft indigo gradient with a thin violet-to-sakura rim light.
- * Apply BEFORE `.clickable {}` so the ripple stays inside the rounded corners.
- */
+/** Quiet, high-contrast card surface shared by all app sections. */
 @Composable
 internal fun Modifier.animeCard(shape: Shape = CardShape): Modifier =
     this.clip(shape)
-        .background(Brush.linearGradient(listOf(Panel2, Panel)), shape)
-        .border(
-            1.dp,
-            Brush.linearGradient(listOf(Violet.copy(alpha = .5f), Color.Transparent, Sakura.copy(alpha = .3f))),
-            shape
-        )
+        .background(Brush.linearGradient(listOf(Panel2.copy(alpha = .72f), Panel.copy(alpha = .98f))), shape)
+        .border(1.dp, Outline.copy(alpha = .72f), shape)
 
-/** Full-screen midnight backdrop with soft violet and sakura glows. */
+/** Restrained midnight backdrop with subtle accent light. */
 @Composable
 internal fun AnimeBackdrop(content: @Composable () -> Unit) {
     Box(
         Modifier.fillMaxSize().background(Ink).drawBehind {
-            drawRect(
-                Brush.radialGradient(
-                    listOf(Violet.copy(alpha = .22f), Color.Transparent),
-                    center = Offset(size.width * .95f, 0f), radius = size.width * .95f
-                )
-            )
-            drawRect(
-                Brush.radialGradient(
-                    listOf(Sakura.copy(alpha = .11f), Color.Transparent),
-                    center = Offset(0f, size.height * .6f), radius = size.width
-                )
-            )
+            drawRect(Brush.radialGradient(
+                colors = listOf(Violet.copy(alpha = .13f), Color.Transparent),
+                center = Offset(size.width * .96f, 0f), radius = size.width * .9f
+            ))
+            drawRect(Brush.radialGradient(
+                colors = listOf(Aqua.copy(alpha = .055f), Color.Transparent),
+                center = Offset(0f, size.height * .72f), radius = size.width * .85f
+            ))
         }
     ) { content() }
 }
 
-/** Section header with a gradient accent bar and an optional action button. */
 @Composable
 internal fun SectionTitle(
-    title: String,
-    subtitle: String? = null,
-    actionLabel: String? = null,
-    onAction: () -> Unit = {},
-    modifier: Modifier = Modifier
+    title: String, subtitle: String? = null, actionLabel: String? = null,
+    onAction: () -> Unit = {}, modifier: Modifier = Modifier
 ) {
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            Modifier.width(4.dp).height(if (subtitle != null) 34.dp else 22.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(Brush.verticalGradient(listOf(Violet, Sakura)))
-        )
-        Spacer(Modifier.width(10.dp))
+        Box(Modifier.width(3.dp).height(if (subtitle != null) 34.dp else 22.dp)
+            .clip(CircleShape).background(Brush.verticalGradient(listOf(Violet, Sakura))))
+        Spacer(Modifier.width(11.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, color = White, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold)
+            Text(title, color = White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             if (subtitle != null) Text(subtitle, color = Muted, fontSize = 11.sp)
         }
-        if (actionLabel != null) {
-            TextButton(onClick = onAction) {
-                Text(actionLabel, color = Violet, fontWeight = FontWeight.Bold)
-            }
+        if (actionLabel != null) TextButton(onClick = onAction) {
+            Text(actionLabel, color = Violet, fontWeight = FontWeight.Bold)
         }
     }
 }
 
-/** Small capsule label, e.g. "EP 5 / 12" or "NOW WATCHING". */
 @Composable
 internal fun Pill(text: String, modifier: Modifier = Modifier, color: Color = Violet) {
-    Text(
-        text,
-        modifier = modifier
-            .background(color.copy(alpha = .16f), CircleShape)
-            .border(1.dp, color.copy(alpha = .45f), CircleShape)
-            .padding(horizontal = 9.dp, vertical = 3.dp),
-        color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .8.sp, maxLines = 1
-    )
+    Text(text, modifier = modifier.background(color.copy(alpha = .14f), CircleShape)
+        .border(1.dp, color.copy(alpha = .38f), CircleShape)
+        .padding(horizontal = 9.dp, vertical = 4.dp),
+        color = color, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+        letterSpacing = .7.sp, maxLines = 1)
 }
 
-/** Cropped, rounded cover image (fixes stretched / letterboxed posters). */
 @Composable
 internal fun PosterImage(url: String, contentDescription: String?, modifier: Modifier = Modifier, corner: Dp = 14.dp) {
-    AsyncImage(
-        model = url, contentDescription = contentDescription, contentScale = ContentScale.Crop,
-        modifier = modifier.clip(RoundedCornerShape(corner)).background(Panel2)
-    )
+    AsyncImage(model = url, contentDescription = contentDescription, contentScale = ContentScale.Crop,
+        modifier = modifier.clip(RoundedCornerShape(corner)).background(Panel2))
 }
 
-/** Thin gradient progress bar. */
 @Composable
 internal fun GradientProgress(fraction: Float, modifier: Modifier = Modifier) {
-    Box(modifier.height(6.dp).clip(CircleShape).background(Ink.copy(alpha = .6f))) {
-        Box(
-            Modifier.fillMaxHeight().fillMaxWidth(fraction.coerceIn(0f, 1f))
-                .clip(CircleShape).background(Brush.horizontalGradient(listOf(Violet, Sakura)))
-        )
+    Box(modifier.height(6.dp).clip(CircleShape).background(Outline.copy(alpha = .7f))) {
+        Box(Modifier.fillMaxHeight().fillMaxWidth(fraction.coerceIn(0f, 1f))
+            .clip(CircleShape).background(Brush.horizontalGradient(listOf(Violet, Sakura))))
     }
 }
