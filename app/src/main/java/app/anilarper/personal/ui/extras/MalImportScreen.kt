@@ -126,7 +126,7 @@ fun MalImportScreen(onImport: (Anime) -> Unit, modifier: Modifier = Modifier) {
                         if (issues.size < 12) issues += "Error: ${row.title} — ${e.message ?: e.javaClass.simpleName}"
                     }
                     progress = index + 1
-                    if (index < rows.lastIndex) delay(700)
+                    if (index < rows.lastIndex) delay(1800) // Keep the total request rate below AniList/Jikan throttling thresholds.
                 }
                 diagnostics = issues.filter { it.startsWith("Error:") }.take(8) + issues.filter { it.startsWith("Skipped:") }.take(8)
                 running = false
@@ -181,13 +181,13 @@ private suspend fun <T> retryImportRequest(block: suspend () -> T): T {
     // AniList and Jikan can throttle bursts during larger imports. Retry transient
     // failures with increasing pauses instead of turning a temporary 429 into a
     // permanently skipped/error entry.
-    for (attempt in 0..2) {
+    for (attempt in 0..3) {
         try {
             return block()
         } catch (e: Exception) {
             if (!isTransientImportError(e)) throw e
             lastError = e
-            if (attempt < 2) delay(1200L * (1L shl attempt))
+            if (attempt < 3) delay(longArrayOf(8_000L, 20_000L, 45_000L)[attempt])
         }
     }
     throw lastError ?: IllegalStateException("Import request failed.")
