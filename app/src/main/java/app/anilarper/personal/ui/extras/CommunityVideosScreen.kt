@@ -55,8 +55,10 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier) {
 
     fun connect() {
         val normalized = serverAddress.trim().trimEnd('/')
-        if (!normalized.startsWith("https://", ignoreCase = true)) {
-            status = "For safety, the app only connects to an HTTPS server address."
+        val parsedAddress = runCatching { URL(normalized) }.getOrNull()
+        if (parsedAddress?.protocol != "https" || parsedAddress.host.isBlank() ||
+            parsedAddress.userInfo != null || parsedAddress.query != null || parsedAddress.ref != null) {
+            status = "Enter a valid HTTPS server address without credentials, query parameters, or fragments."
             return
         }
         scope.launch {
