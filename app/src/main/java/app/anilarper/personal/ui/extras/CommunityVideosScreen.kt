@@ -10,10 +10,9 @@ import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
@@ -245,7 +244,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
             }
         }
     } else Column(
-        modifier.fillMaxSize().background(Ink).padding(16.dp),
+        modifier.fillMaxSize().background(Ink).padding(16.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("COMMUNITY", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp)
@@ -391,7 +390,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
             else -> filteredVideos
         }
         if (videos.isEmpty()) {
-            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
                 Text("Your connected server's videos will appear here.", color = Muted, fontSize = 13.sp)
             }
         } else {
@@ -399,8 +398,8 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                     Text("No videos match this search or category.", color = Muted, fontSize = 13.sp)
                 }
-            } else LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(visibleVideos, key = { it.id }) { video ->
+            } else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                visibleVideos.forEach { video ->
                     Row(
                         Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp))
                             .clickable {
