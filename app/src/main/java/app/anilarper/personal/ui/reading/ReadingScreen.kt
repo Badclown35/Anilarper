@@ -15,6 +15,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
@@ -58,6 +60,11 @@ fun ReadingScreen(
             FilterChip(selected = !novels, onClick = { novels = false }, label = { Text("Manga") })
             FilterChip(selected = novels, onClick = { novels = true }, label = { Text("Light novels") })
         }
+        if (!novels) {
+            TextButton(onClick = {
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://mangaplus.shueisha.co.jp/"))) }
+            }) { Text("Browse official MANGA Plus catalog ↗", color = Violet, fontSize = 11.sp) }
+        }
         OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(),
             placeholder = { Text(if (novels) "Search light novels…" else "Search manga…", color = Muted) },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Muted) },
@@ -82,13 +89,21 @@ fun ReadingScreen(
                         Column(Modifier.weight(1f)) {
                             Text(title.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
                             Text(title.format + " • " + title.readingStatus, color = Violet, fontSize = 10.sp)
+                            Text("Source: " + title.provider, color = Muted, fontSize = 10.sp)
                             Text(title.progress.toString() + (title.chapters?.let { " / " + it } ?: "") + " chapters",
                                 color = Muted, fontSize = 10.sp)
                             Text(title.volumeProgress.toString() + (title.volumes?.let { " / " + it } ?: "") + " volumes",
                                 color = Muted, fontSize = 10.sp)
                         }
-                        IconButton(onClick = { onRemove(title) }) {
-                            Icon(Icons.Default.Close, contentDescription = "Remove title", tint = Muted)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            if (title.sourceUrl.isNotBlank()) {
+                                IconButton(onClick = {
+                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(title.sourceUrl))) }
+                                }) { Icon(Icons.Default.OpenInNew, contentDescription = "Open ${title.provider}", tint = Violet) }
+                            }
+                            IconButton(onClick = { onRemove(title) }) {
+                                Icon(Icons.Default.Close, contentDescription = "Remove title", tint = Muted)
+                            }
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -125,7 +140,7 @@ fun ReadingScreen(
                 CircularProgressIndicator(color = Violet)
             } }
             error?.let { message -> item { Text(message, color = Muted, fontSize = 12.sp) } }
-            items(results, key = { "result-" + it.kind + "-" + it.id }) { title ->
+            items(results, key = { "result-" + it.provider + "-" + it.providerId.ifBlank { it.id.toString() } }) { title ->
                 val saved = library.any { it.id == title.id && it.kind == title.kind }
                 Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(13.dp)).padding(10.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -136,11 +151,21 @@ fun ReadingScreen(
                         Text(title.format + " • " + (title.chapters?.let { it.toString() + " chapters" } ?: "Chapter count unknown"),
                             color = Muted, fontSize = 10.sp)
                         Text(title.volumes?.let { it.toString() + " volumes" } ?: "Volumes unknown", color = Muted, fontSize = 10.sp)
+                        Text("SOURCE • " + title.provider, color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
-                    IconButton(onClick = { if (!saved) onAdd(title) }, enabled = !saved) {
-                        Icon(if (saved) Icons.Default.CheckCircle else Icons.Default.AddCircle,
-                            contentDescription = if (saved) "Saved" else "Add to reading shelf",
-                            tint = if (saved) Violet else White)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        IconButton(onClick = { if (!saved) onAdd(title) }, enabled = !saved) {
+                            Icon(if (saved) Icons.Default.CheckCircle else Icons.Default.AddCircle,
+                                contentDescription = if (saved) "Saved" else "Add to reading shelf",
+                                tint = if (saved) Violet else White)
+                        }
+                        if (title.sourceUrl.isNotBlank()) {
+                            IconButton(onClick = {
+                                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(title.sourceUrl))) }
+                            }) {
+                                Icon(Icons.Default.OpenInNew, contentDescription = "Open ${title.provider}", tint = Violet)
+                            }
+                        }
                     }
                 }
             }
