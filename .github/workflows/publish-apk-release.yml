@@ -1,0 +1,52 @@
+name: Publish APK to GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Release tag
+        required: true
+        default: preview-2026-11-10
+      release_name:
+        description: Public release title
+        required: true
+        default: Anilarper Preview — November 10, 2026
+      build_run_id:
+        description: Successful Android build workflow run ID
+        required: true
+        default: "42883287362"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Anilarper-debug
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+          path: release-assets
+
+      - name: Check APK exists
+        run: |
+          find release-assets -type f -print
+          test -n "$(find release-assets -type f -name '*.apk' -print -quit)"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name }}
+          RELEASE_NAME: ${{ inputs.release_name }}
+          TARGET_SHA: ba62c5fde23fe326187f411505cd2e7c5bcfd745
+        run: |
+          mapfile -t APK_FILES < <(find release-assets -type f -name '*.apk' -print)
+          gh release create "$TAG_NAME" "${APK_FILES[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$TARGET_SHA" \
+            --title "$RELEASE_NAME" \
+            --notes "Public preview build of Anilarper. Download the APK asset below. This is a debug build; Android may show an installation confirmation when you install it."
