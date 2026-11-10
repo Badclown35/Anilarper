@@ -161,9 +161,11 @@ internal fun OnlineMusicDiscovery(
             OutlinedButton(onClick = { openSearch("https://archive.org/search?query=" }, modifier = Modifier.weight(1f)) { Text("Archive.org") }
             OutlinedButton(onClick = { openSearch("https://soundcloud.com/search/sounds?q=" }, modifier = Modifier.weight(1f)) { Text("SoundCloud") }
         }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
             OutlinedButton(onClick = { openSearch("https://bandcamp.com/search?q=" }, modifier = Modifier.weight(1f)) { Text("Bandcamp") }
             OutlinedButton(onClick = { openSearch("https://www.jamendo.com/search?q=" }, modifier = Modifier.weight(1f)) { Text("Jamendo") }
+        }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
             OutlinedButton(onClick = { openSearch("https://open.spotify.com/search/") }, modifier = Modifier.weight(1f)) { Text("Spotify") }
