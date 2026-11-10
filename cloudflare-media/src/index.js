@@ -29,12 +29,12 @@ function json(data, status) {
   });
 }
 function cleanText(value, max) {
-  return String(value || "").replace(/\\s+/g, " ").trim().slice(0, max || 120);
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max || 120);
 }
 function safeFilename(value) {
-  const name = String(value || "").split(/[\\\\/]/).pop()
+  const name = String(value || "").split(/[\\/]/).pop()
     .replace(/[^A-Za-z0-9._ -]/g, "_").trim().replace(/^[. ]+|[. ]+$/g, "");
-  if (!name || !/\\.mp4$/i.test(name)) throw new Error("Only MP4 files are accepted.");
+  if (!name || !/\.mp4$/i.test(name)) throw new Error("Only MP4 files are accepted.");
   return name.slice(0, 150);
 }
 function isAdmin(request, env) {
@@ -57,7 +57,7 @@ function s3Client(env) {
   });
 }
 function objectUrl(env, key, query) {
-  const endpoint = (env.B2_ENDPOINT || DEFAULT_ENDPOINT).replace(/\\/$/, "");
+  const endpoint = (env.B2_ENDPOINT || DEFAULT_ENDPOINT).replace(/\/$/, "");
   const bucket = env.B2_BUCKET || DEFAULT_BUCKET;
   const encodedKey = key.split("/").map(encodeURIComponent).join("/");
   return endpoint + "/" + encodeURIComponent(bucket) + "/" + encodedKey + (query || "");
@@ -74,11 +74,11 @@ async function b2Request(env, method, key, options) {
 async function assertS3(response, operation) {
   if (response.ok) return response;
   const body = await response.text().catch(() => "");
-  const code = /<Code>([^<]+)<\\/Code>/.exec(body);
+  const code = /<Code>([^<]+)<\/Code>/.exec(body);
   throw new Error(operation + " failed (" + response.status + (code ? ", " + code[1] : "") + ").");
 }
 function xmlValue(xml, name) {
-  const match = new RegExp("<" + name + ">([\\s\\S]*?)</" + name + ">").exec(xml);
+  const match = new RegExp("<" + name + ">([\s\S]*?)</" + name + ">").exec(xml);
   return match ? match[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">") : "";
 }
 async function readCatalog(env) {
@@ -189,7 +189,7 @@ async function handleApi(request, env, url) {
   if (path.startsWith("/media/") && (request.method === "GET" || request.method === "HEAD")) {
     let id;
     try { id = decodeURIComponent(path.slice(7)); } catch (_) { return json({ error: "Invalid video ID." }, 404); }
-    if (!/^[A-Za-z0-9-]+_[A-Za-z0-9._ -]+\\.mp4$/i.test(id)) return json({ error: "Invalid video ID." }, 404);
+    if (!/^[A-Za-z0-9-]+_[A-Za-z0-9._ -]+\.mp4$/i.test(id)) return json({ error: "Invalid video ID." }, 404);
     return streamMedia(request, env, id);
   }
   if (!isAdmin(request, env)) return json({ error: "Admin authorization required." }, 401);
@@ -208,7 +208,7 @@ async function handleApi(request, env, url) {
     }
     const id = crypto.randomUUID() + "_" + filename;
     const key = MEDIA_PREFIX + id;
-    const title = cleanText(body.title, 120) || filename.replace(/\\.mp4$/i, "");
+    const title = cleanText(body.title, 120) || filename.replace(/\.mp4$/i, "");
     const category = cleanText(body.category, 40) || "Uncategorized";
     const uploadId = await initiateMultipart(env, key, title, category);
     catalog.pending.push({ id, key, uploadId, size, title, category, created: Date.now() });
@@ -273,7 +273,7 @@ async function handleApi(request, env, url) {
     return json({ ok: true });
   }
 
-  const metadataMatch = /^\\/api\\/videos\\/([^/]+)\\/metadata$/.exec(path);
+  const metadataMatch = /^\/api\/videos\/([^/]+)\/metadata$/.exec(path);
   if (request.method === "POST" && metadataMatch) {
     const id = decodeURIComponent(metadataMatch[1]);
     const catalog = await readCatalog(env);
