@@ -75,6 +75,14 @@ function env() {
 }
 const adminHeaders = { Authorization: "Bearer test-admin-token" };
 
+test("admin page is served with protective response headers", async () => {
+  const e = env();
+  const admin = await worker.fetch(request("/admin"), e);
+  assert.equal(admin.status, 200);
+  assert.equal(admin.headers.get("Cache-Control"), "no-store");
+  assert.match(admin.headers.get("Content-Security-Policy"), /default-src 'self'/);
+});
+
 test("health and public catalog are available without admin credentials", async () => {
   const e = env();
   const health = await worker.fetch(request("/api/health"), e);
