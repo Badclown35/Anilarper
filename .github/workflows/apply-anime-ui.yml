@@ -1,0 +1,42 @@
+name: Apply Anilarper anime UI archive
+
+on:
+  push:
+    branches:
+      - ui-refresh/anime-ui
+    paths:
+      - .github/workflows/apply-anime-ui.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ui-refresh/anime-ui
+          fetch-depth: 0
+      - name: Apply the supplied project snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/anilarper-ui
+          unzip -q Anilarper-anime-ui.zip -d /tmp/anilarper-ui
+          test -d /tmp/anilarper-ui/Anilarper-main/app/src/main/java/app/anilarper/personal
+          rsync -a /tmp/anilarper-ui/Anilarper-main/ ./
+          rm -f .github/workflows/apply-anime-ui.yml
+      - name: Commit UI updates
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes found in archive."
+            exit 0
+          fi
+          git commit -m "Apply anime UI project update"
+          git push origin HEAD:ui-refresh/anime-ui
