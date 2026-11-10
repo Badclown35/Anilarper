@@ -288,7 +288,10 @@ data class ReadingTitle(
     val kind: String,
     val progress: Int = 0,
     val volumeProgress: Int = 0,
-    val readingStatus: String = "PLANNING"
+    val readingStatus: String = "PLANNING",
+    val provider: String = "AniList",
+    val providerId: String = "",
+    val sourceUrl: String = ""
 )
 
 object AniListReadingApi {
@@ -350,7 +353,10 @@ object AniListReadingApi {
                             .replace(Regex("<[^>]*>"), "")
                             .replace("&amp;", "&").replace("&quot;", "\"")
                             .replace("&#039;", "'").replace("&lt;", "<").replace("&gt;", ">"),
-                        kind = if (novels) "NOVEL" else "MANGA"
+                        kind = if (novels) "NOVEL" else "MANGA",
+                        provider = "AniList",
+                        providerId = item.optInt("id").toString(),
+                        sourceUrl = "https://anilist.co/manga/${item.optInt("id")}"
                     ))
                 }
             }
