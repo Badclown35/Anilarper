@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -63,6 +64,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
     var status by remember { mutableStateOf("Enter the secure server address to browse shared videos.") }
     var loading by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<SharedVideo?>(null) }
+    var lastWatchedId by remember { mutableStateOf(prefs.getString("last_video_id", null)) }
     var fullscreen by remember { mutableStateOf(false) }
     val activity = context as? Activity
     val originalOrientation = remember(activity) { activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
@@ -89,6 +91,45 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
     val player = remember { ExoPlayer.Builder(context).build() }
 
     DisposableEffect(player) { onDispose { player.release() } }
+
+    fun playVideo(video: SharedVideo, resume: Boolean = false) {
+        selected = video
+        val encodedPath = Uri.encode(video.streamPath, "/")
+        player.setMediaItem(MediaItem.fromUri("$connectedAddress$encodedPath"))
+        player.prepare()
+        if (resume && prefs.getString("last_video_id", null) == video.id) {
+            player.seekTo(prefs.getLong("last_video_position", 0L).coerceAtLeast(0L))
+        } else prefs.edit().putLong("last_video_position", 0L).apply()
+        player.play()
+    }
+
+    DisposableEffect(player, selected) {
+        val current = selected
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (!isPlaying && current != null && player.currentPosition > 0L) {
+                    prefs.edit().putString("last_video_id", current.id)
+                        .putString("last_video_title", current.title)
+                        .putLong("last_video_position", player.currentPosition).apply()
+                    lastWatchedId = current.id
+                }
+            }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED && current != null)
+                    prefs.edit().putLong("last_video_position", 0L).apply()
+            }
+        }
+        player.addListener(listener)
+        onDispose {
+            if (current != null && player.currentPosition > 0L) {
+                prefs.edit().putString("last_video_id", current.id)
+                    .putString("last_video_title", current.title)
+                    .putLong("last_video_position", player.currentPosition).apply()
+                lastWatchedId = current.id
+            }
+            player.removeListener(listener)
+        }
+    }
 
     fun connect() {
         val normalized = serverAddress.trim().trimEnd('/')
@@ -198,6 +239,20 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
             }
         }
         Text(status, color = Muted, fontSize = 12.sp)
+        val resumeVideo = videos.firstOrNull { it.id == lastWatchedId }
+        val savedPosition = prefs.getLong("last_video_position", 0L)
+        if (resumeVideo != null && savedPosition > 0L) {
+            Row(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp)).clickable {
+                playVideo(resumeVideo, resume = true)
+            }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("CONTINUE WATCHING", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    Text(resumeVideo.title, color = White, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Text("Resume at ${savedPosition / 60000L} min", color = Muted, fontSize = 11.sp)
+                }
+                Text("RESUME", color = Violet, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+            }
+        }
         if (selected != null) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("NOW PLAYING • ${selected!!.title}", color = Violet, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1)
