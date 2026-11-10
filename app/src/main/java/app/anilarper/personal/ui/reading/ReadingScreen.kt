@@ -97,7 +97,12 @@ fun ReadingScreen(
                         Column(Modifier.weight(1f)) {
                             Text(title.title, color = White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2)
                             Text(title.format + " • " + title.readingStatus, color = Violet, fontSize = 10.sp)
-                            Text(if (title.provider == "MangaDex") "MangaDex • chapters not checked" else title.provider + " • catalog only", color = Muted, fontSize = 10.sp)
+                            Text(when {
+                                title.provider != "MangaDex" -> title.provider + " • catalog only"
+                                chapterChecks[title.providerId]?.startsWith("https://") == true -> "MangaDex • chapters available"
+                                chapterChecks[title.providerId] == "none" -> "MangaDex • no safe English chapters"
+                                else -> "MangaDex • chapters not checked"
+                            }, color = Muted, fontSize = 10.sp)
                             Text(title.progress.toString() + (title.chapters?.let { " / " + it } ?: "") + " chapters",
                                 color = Muted, fontSize = 10.sp)
                             Text(title.volumeProgress.toString() + (title.volumes?.let { " / " + it } ?: "") + " volumes",
