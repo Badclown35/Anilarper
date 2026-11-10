@@ -1,47 +1,82 @@
-# Anilarper public media (free-tier setup)
+# Anilarper public media (Backblaze B2 + Cloudflare Worker)
 
-This replaces the always-on Termux video host with Cloudflare R2 + a Cloudflare Worker. The Worker URL is a free `workers.dev` HTTPS address; no custom domain, tunnel, or paid hosting plan is required. R2 Standard's free allowance is 10 GB-month storage, 1 million Class A operations, 10 million Class B operations, and free internet egress. Workers Free includes 100,000 requests/day. These are provider quotas, not unlimited service; exceeding included quotas can stop requests or incur charges depending on account billing configuration. Keep the bucket at or below the app's strict 10,000,000,000-byte cap.
+The media API runs on a Cloudflare Worker and stores MP4 files in a **private Backblaze B2 bucket**. The Worker is the only component that holds the storage credentials. It exposes a public video catalog and byte-range streaming endpoint while keeping the B2 bucket and its keys private.
 
-## Public access and security
+This setup does not make storage or bandwidth unlimited. Check the current Backblaze and Cloudflare usage pages before sharing the service widely. Do not enable paid add-ons or enter payment details without a parent/guardian.
 
-- `GET /api/videos` and `GET /media/{id}` are public. Anyone with the Worker URL can browse and stream the files.
-- Upload, edit, delete, and multipart upload endpoints require the secret `ADMIN_TOKEN` as a Bearer token.
-- Never put the admin token in the app, Git repository, screenshots, public links, or messages. Enter it only in the private admin page at `/admin` over HTTPS.
-- Only upload MP4s that you own or have permission to distribute. Public files can be copied or shared by anyone.
-- R2's free allowance is monthly storage, not a 10 GB monthly download cap. Egress is free, but Worker request quotas still apply.
+## Architecture and security
 
-## Deploy (one-time)
+- Backblaze bucket: `anilarper-media` in region `us-east-005`.
+- Bucket access should remain **Private**. Do not switch it to Public.
+- `GET /api/videos` and `GET /media/{id}` are public through the Worker. The Worker signs requests to the private B2 bucket and streams the response, including HTTP byte ranges.
+- Upload, edit, delete, and multipart endpoints require the separate Worker secret `ADMIN_TOKEN`.
+- The B2 Application Key ID and Application Key are Worker secrets named `B2_KEY_ID` and `B2_APP_KEY`. Never put them in the Android app, browser JavaScript, GitHub, screenshots, or chat.
+- Use a standard, bucket-scoped application key, not the Backblaze master key. Backblaze's S3-compatible API uses Signature Version 4 and maps the Application Key ID to the access key ID and the Application Key to the secret access key.
+- Only upload MP4 files that you own or have permission to distribute. Public Worker links can be copied and shared by anyone.
 
-Use an account managed by a parent/guardian if Cloudflare account eligibility or payment setup requires an adult. Do not add a paid plan or enable paid add-ons.
+## One-time setup
 
-1. Install Node.js on a computer or supported shell, then install Wrangler: `npm install -g wrangler`.
-2. Sign in: `wrangler login`.
-3. Create the bucket: `wrangler r2 bucket create anilarper-public-media`.
-4. From this folder, set a long random admin secret: `wrangler secret put ADMIN_TOKEN`. Keep it private and do not commit it.
-5. Deploy: `wrangler deploy`.
-6. Wrangler prints a URL like `https://anilarper-media-api.<your-subdomain>.workers.dev`. Open that URL plus `/admin` to upload/manage videos. Enter the secret token there.
-7. In Anilarper Community Videos, enter the Worker URL (without `/admin`) and tap Connect.
+Have a parent/guardian help with account agreements, eligibility, and any billing-related screens. Keep both services on their free plans; do not add a paid plan or paid add-on.
 
-The free `workers.dev` hostname avoids domain purchase costs. R2's rate-limited `r2.dev` public bucket URL is not used; the Worker streams R2 objects and supports HTTP byte ranges for seeking.
+### 1. Backblaze B2
+
+1. In B2 Cloud Storage, confirm the bucket is named `anilarper-media`, is in region `us-east-005`, and is **Private**.
+2. Create a standard Application Key named `anilarper-worker`.
+3. Limit the key to the `anilarper-media` bucket and choose **Read and Write**.
+4. Save the Application Key ID and the Application Key privately. Backblaze only displays the secret Application Key when it is created.
+5. Do not use the master application key. The Worker does not need permission to list all bucket names because it addresses the bucket directly.
+
+### 2. Cloudflare Worker
+
+From this folder, install the pinned dependency and Wrangler:
+
+```sh
+npm install
+npx wrangler login
+```
+
+Add the three secrets. Each command prompts for the value; enter it directly into the private terminal prompt. Do not put the values in a command-line argument, source file, or GitHub Actions log.
+
+```sh
+npx wrangler secret put B2_KEY_ID
+npx wrangler secret put B2_APP_KEY
+npx wrangler secret put ADMIN_TOKEN
+```
+
+Use a long, unique random value for `ADMIN_TOKEN`. Keep it private. The endpoint, region, and bucket name are already set as non-secret variables in `wrangler.toml`.
+
+Deploy:
+
+```sh
+npm test
+npm run check
+npx wrangler deploy
+```
+
+Wrangler prints a URL similar to `https://anilarper-media-api.<your-subdomain>.workers.dev`. Open that URL plus `/admin` to upload and manage videos. Enter only the Worker admin token on that HTTPS admin page.
+
+In Anilarper Community Videos, enter the Worker URL without `/admin` and tap Connect.
 
 ## API
 
 - `GET /api/health` — health and storage cap.
 - `GET /api/videos` — public catalog in the format Anilarper already reads.
-- `GET/HEAD /media/{id}` — public MP4 stream with byte-range support.
+- `GET/HEAD /media/{id}` — public MP4 stream with HTTP byte-range support.
 - `POST /api/upload/start`, `PUT /api/upload/part`, `POST /api/upload/complete`, `POST /api/upload/abort` — authenticated multipart upload.
 - `POST /api/videos/{id}/metadata` — authenticated title/category edit.
 - `DELETE /api/videos/{id}` — authenticated deletion.
 
-Uploads use 8 MiB parts to stay below Workers Free request-body limits. Individual videos are capped at 5 GiB and completed plus pending uploads at 10,000,000,000 bytes. Incomplete multipart uploads are tracked in the catalog; R2 automatically expires abandoned multipart uploads after seven days. If the browser closes unexpectedly, an abandoned catalog reservation may need cleanup; the admin page attempts to abort uploads after ordinary upload errors.
+Uploads use 8 MiB parts. Individual videos are capped at 5 GiB and completed plus pending uploads at 10,000,000,000 bytes. The Worker checks the actual completed object size before publishing it in the catalog.
 
-## Free-tier limits
+## Cost and usage notes
 
-- R2 Standard: 10 GB-month storage, 1 million Class A operations/month, 10 million Class B operations/month; egress is free.
-- Workers Free: 100,000 requests/day and 10 ms CPU time per invocation. Video players can make multiple range requests, so high public traffic can exhaust the daily request quota.
-- No custom domain is configured.
-- Configure usage notifications if available and do not upgrade to a paid plan. If Cloudflare requires payment verification, have a parent/guardian handle it; never enter payment information without them.
+- Backblaze storage, download/egress, and transaction allowances are separate. The 10 GB app-side cap is only a guardrail; it does not guarantee that all downloads remain free.
+- Cloudflare Worker requests also have plan limits. Video players can make multiple range requests while seeking, so public traffic can use requests faster than expected.
+- Monitor both providers' usage and billing dashboards. If either provider asks for payment information or a plan change, stop and have a parent/guardian review it before proceeding.
+- This Worker does not configure a custom domain, public B2 bucket, or direct public B2 URL.
 
-## Local checks
+## Local checks and deployment status
 
-Run `node --check src/index.js`. Cloudflare runtime behavior, account activation, and actual playback still need testing after deployment. This repository cannot create a Cloudflare account, bucket, secret, or deployment on the user's behalf.
+Run `npm test` and `npm run check` from this directory. The tests use an in-memory S3-compatible mock; they do not prove that the real Backblaze key, bucket, account limits, or Cloudflare deployment works. After deployment, verify `/api/health`, upload a small MP4 from `/admin`, play it in Anilarper, seek within it, and delete it.
+
+The repository changes do not create provider accounts, store secrets, or deploy the Worker on your behalf.
