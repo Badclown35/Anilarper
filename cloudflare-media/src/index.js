@@ -98,7 +98,9 @@ async function handleApi(request, env, url) {
   }
   if (request.method === "GET" && path === "/api/videos") {
     const catalog = await readCatalog(env.MEDIA_BUCKET);
-    return json({ videos: catalog.videos.map(publicVideo) });
+    const usedBytes = catalog.videos.reduce(function(sum, v) { return sum + Number(v.size || 0); }, 0);
+    const pendingBytes = catalog.pending.reduce(function(sum, p) { return sum + Number(p.size || 0); }, 0);
+    return json({ videos: catalog.videos.map(publicVideo), storage: { usedBytes: usedBytes, pendingBytes: pendingBytes, maxBytes: MAX_STORAGE_BYTES } });
   }
   if (path.startsWith("/media/") && (request.method === "GET" || request.method === "HEAD")) {
     const id = decodeURIComponent(path.slice(7));
