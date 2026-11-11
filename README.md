@@ -42,3 +42,9 @@ See [`cloudflare-media/README.md`](cloudflare-media/README.md) for the free-tier
 - GitHub Actions confirms that the Android project compiles; it does not replace device testing.
 - The Cloudflare Worker and admin page have syntax-validation automation; live Cloudflare deployment and video playback still require testing in the user's account.
 - Still validate audio playback/background controls, local and shared video seeking, backup/restore on a real device, navigation, and smaller-screen layouts.
+
+---
+
+## AI-assisted development
+
+> **Vibe coded with AI.** This project was built and iterated on with AI assistance, guided by human ideas, prompts, testing, and decisions. AI-generated contributions may contain mistakes; review and verify changes before use.
