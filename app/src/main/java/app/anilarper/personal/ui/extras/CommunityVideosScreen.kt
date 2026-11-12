@@ -305,7 +305,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
             value = serverAddress,
             onValueChange = { serverAddress = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Server address (HTTPS or local HTTP)") },
+            label = { Text("Cloud server address (HTTPS)") },
             singleLine = true,
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = White, unfocusedTextColor = White,
@@ -350,7 +350,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
             Column(Modifier.fillMaxWidth().animeCard(RoundedCornerShape(14.dp)).padding(13.dp),
                 verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("COMMUNITY STORAGE", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    Text("COMBINED STORAGE", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                     Spacer(Modifier.weight(1f))
                     Text(String.format("%.1f%%", fraction * 100f), color = if (fraction >= .85f) Color(0xFFFFB86B) else White,
                         fontSize = 12.sp, fontWeight = FontWeight.Bold)
