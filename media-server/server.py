@@ -16,6 +16,7 @@ TOKEN_FILE = ROOT / ".admin_token"
 META_FILE = ROOT / "video_metadata.json"
 MAX_UPLOAD = 5 * 1024 * 1024 * 1024
 CHUNK = 1024 * 1024
+RESERVE_BYTES = 512 * 1024 * 1024
 PORT = int(os.environ.get("ANILARPER_PORT", "8765"))
 
 if not TOKEN_FILE.exists():
@@ -167,6 +168,8 @@ class Handler(BaseHTTPRequestHandler):
                 "totalBytes": disk.total,
                 "usedBytes": disk.used,
                 "freeBytes": disk.free,
+                "availableBytes": max(0, disk.free - RESERVE_BYTES),
+                "reserveBytes": RESERVE_BYTES,
                 "mediaBytes": media_bytes
             }); return
         if path == "/api/videos":
