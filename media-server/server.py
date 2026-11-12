@@ -3,7 +3,7 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, unquote
-import hashlib, hmac, json, os, re, secrets, urllib.request, urllib.error
+import hashlib, hmac, json, os, re, secrets, shutil, urllib.request, urllib.error
 from urllib.parse import urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parent
@@ -16,6 +16,7 @@ TOKEN_FILE = ROOT / ".admin_token"
 META_FILE = ROOT / "video_metadata.json"
 MAX_UPLOAD = 5 * 1024 * 1024 * 1024
 CHUNK = 1024 * 1024
+RESERVE_BYTES = 512 * 1024 * 1024
 PORT = int(os.environ.get("ANILARPER_PORT", "8765"))
 
 if not TOKEN_FILE.exists():
@@ -51,6 +52,40 @@ def find_media_file(filename):
 
 def clean_text(value, limit=100):
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
+
+def video_catalog(public_only=False):
+    videos = []
+    metadata = read_metadata()
+    files_by_name = {}
+    for folder in MEDIA_DIRS:
+        for candidate in folder.glob("*.mp4"):
+            if candidate.is_file() and not candidate.is_symlink():
+                files_by_name.setdefault(candidate.name, candidate)
+    for file_path in sorted(files_by_name.values(), key=lambda p: p.name.lower()):
+        try:
+            if not file_path.is_file() or file_path.is_symlink():
+                continue
+            meta = metadata.get(file_path.name, {})
+            if not isinstance(meta, dict):
+                meta = {}
+            visibility = meta.get("visibility", "private")
+            if visibility not in ("private", "public"):
+                visibility = "private"
+            if public_only and visibility != "public":
+                continue
+            stat = file_path.stat()
+            videos.append({
+                "id": file_path.name,
+                "title": clean_text(meta.get("title")) or file_path.stem,
+                "category": clean_text(meta.get("category")) or "Uncategorized",
+                "size": stat.st_size,
+                "modified": int(stat.st_mtime),
+                "streamPath": "/media/" + file_path.name,
+                "visibility": visibility
+            })
+        except OSError:
+            continue
+    return videos
 
 def safe_name(value):
     name = Path(unquote(value or "")).name
@@ -155,31 +190,43 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers(); self.wfile.write(page); return
         if path == "/api/health":
             self.send_json(200, {"ok": True, "server": "AnilarperMedia", "version": 1}); return
+        if path == "/api/storage":
+            disk = shutil.disk_usage(ROOT.parent)
+            media_bytes = sum(
+                f.stat().st_size
+                for folder in MEDIA_DIRS
+                for f in folder.glob("*.mp4")
+                if f.is_file()
+            )
+            self.send_json(200, {
+                "totalBytes": disk.total,
+                "usedBytes": disk.used,
+                "freeBytes": disk.free,
+                "availableBytes": max(0, disk.free - RESERVE_BYTES),
+                "reserveBytes": RESERVE_BYTES,
+                "mediaBytes": media_bytes
+            }); return
         if path == "/api/videos":
-            videos = []
-            metadata = read_metadata()
-            files_by_name = {}
-            for folder in MEDIA_DIRS:
-                for candidate in folder.glob("*.mp4"):
-                    if candidate.is_file(): files_by_name.setdefault(candidate.name, candidate)
-            for f in sorted(files_by_name.values(), key=lambda p: p.name.lower()):
-                if f.is_file():
-                    st = f.stat()
-                    meta = metadata.get(f.name, {})
-                    videos.append({"id": f.name, "title": clean_text(meta.get("title")) or f.stem,
-                                   "category": clean_text(meta.get("category")) or "Uncategorized", "size": st.st_size,
-                                   "modified": int(st.st_mtime), "streamPath": "/media/" + f.name})
-            self.send_json(200, {"videos": videos}); return
+            self.send_json(200, {"videos": video_catalog(public_only=True)}); return
+        if path == "/api/admin/videos":
+            if not self.authorized():
+                self.send_json(401, {"error": "Unauthorized"}); return
+            self.send_json(200, {"videos": video_catalog(public_only=False)}); return
         if path.startswith("/media/"):
             name = unquote(path[len("/media/"):])
             if not name or Path(name).name != name: self.send_error(404); return
+            meta = read_metadata().get(name, {})
+            if not isinstance(meta, dict) or meta.get("visibility") != "public":
+                self.send_error(404); return
             self.stream_file(find_media_file(name)); return
         self.send_error(404)
     def do_HEAD(self):
         path = urlsplit(self.path).path
         if path.startswith("/media/"):
             name = unquote(path[len("/media/"):])
-            if name and Path(name).name == name: self.stream_file(find_media_file(name), True); return
+            meta = read_metadata().get(name, {}) if name and Path(name).name == name else {}
+            if name and Path(name).name == name and isinstance(meta, dict) and meta.get("visibility") == "public":
+                self.stream_file(find_media_file(name), True); return
         self.send_error(404)
     def stream_file(self, file_path, head_only=False):
         if not file_path.is_file() or file_path.suffix.lower() != ".mp4": self.send_error(404); return
@@ -247,7 +294,16 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(payload, dict):
                     raise ValueError("Metadata must be a JSON object.")
                 metadata = read_metadata()
-                metadata[name] = {"title": clean_text(payload.get("title"), 120) or Path(name).stem, "category": clean_text(payload.get("category"), 40) or "Uncategorized"}
+                old = metadata.get(name, {})
+                if not isinstance(old, dict): old = {}
+                visibility = payload.get("visibility", old.get("visibility", "private"))
+                if visibility not in ("private", "public"):
+                    raise ValueError("Visibility must be private or public.")
+                metadata[name] = {
+                    "title": clean_text(payload.get("title", old.get("title")), 120) or Path(name).stem,
+                    "category": clean_text(payload.get("category", old.get("category")), 40) or "Uncategorized",
+                    "visibility": visibility
+                }
                 write_metadata(metadata)
                 self.send_json(200, {"ok": True, "id": name, **metadata[name]})
             except Exception as exc: self.send_json(400, {"error": "Invalid metadata: " + str(exc)[:100]})
@@ -313,9 +369,9 @@ li{margin:12px 0;overflow-wrap:anywhere}progress{width:100%;height:18px}</style>
 <div class="card"><h2>Shared videos</h2><input id="search" placeholder="Search videos…" oninput="load()" style="width:100%;box-sizing:border-box"><p><select id="filter" onchange="load()"><option value="">All categories</option></select> <button onclick="load()">Refresh list</button></p><ul id="list"></ul></div>
 <script>
 const token=document.getElementById('token'), statusEl=document.getElementById('status'), bar=document.getElementById('progress');
-async function load(){let r=await fetch('/api/videos');let j=await r.json();let ul=document.getElementById('list');ul.replaceChildren();
+async function load(){let headers=token.value?{'Authorization':'Bearer '+token.value}:{};let endpoint=token.value?'/api/admin/videos':'/api/videos';let r=await fetch(endpoint,{headers});let j=await r.json();if(!r.ok){statusEl.textContent=j.error||'Could not load videos';return}let ul=document.getElementById('list');ul.replaceChildren();
 let filter=document.getElementById('filter'),previous=filter.value,cats=[...new Set(j.videos.map(v=>v.category||'Uncategorized'))].sort();filter.replaceChildren(new Option('All categories',''));for(let c of cats)filter.add(new Option(c,c));filter.value=cats.includes(previous)?previous:'';let q=document.getElementById('search').value.toLowerCase();
-for(let v of j.videos){if(filter.value&&v.category!==filter.value)continue;if(q&&!((v.title+' '+v.id+' '+v.category).toLowerCase().includes(q)))continue;let li=document.createElement('li'),a=document.createElement('a'),del=document.createElement('button'),publish=document.createElement('button');a.href=v.streamPath;a.textContent=v.title;a.style.color='#9bb8ff';a.target='_blank';del.textContent='Delete';del.style.marginLeft='10px';del.onclick=async()=>{if(!token.value){statusEl.textContent='Enter admin token to delete videos.';return}if(!confirm('Delete "'+v.title+'" from this server?'))return;del.disabled=true;let r=await fetch('/api/videos/'+encodeURIComponent(v.id),{method:'DELETE',headers:{'Authorization':'Bearer '+token.value}});statusEl.textContent=r.ok?'Deleted '+v.title:'Delete failed: '+await r.text();if(r.ok)await load();else del.disabled=false};publish.textContent='Publish to Community';publish.style.marginLeft='6px';publish.onclick=async()=>{if(!token.value||!document.getElementById('workerToken').value){statusEl.textContent='Enter both admin tokens first.';return}if(!confirm('Publish a cloud copy of "'+v.title+'"? The phone copy will remain unchanged.'))return;publish.disabled=true;statusEl.textContent='Publishing '+v.title+' to the public cloud…';try{let rr=await fetch('/api/publish',{method:'POST',headers:{'Authorization':'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({id:v.id,workerUrl:document.getElementById('workerUrl').value,workerToken:document.getElementById('workerToken').value})});let result=await rr.json();if(!rr.ok)throw new Error(result.error||'Publish failed');statusEl.textContent='Published '+v.title+' to Community Videos. Refresh Anilarper to see it.';publish.textContent='Published';}catch(e){statusEl.textContent='Publish failed: '+e.message;publish.disabled=false}};let edit=document.createElement('button');edit.textContent='Organize';edit.style.marginLeft='6px';edit.onclick=async()=>{if(!token.value){statusEl.textContent='Enter admin token to organize videos.';return}let title=prompt('Video title:',v.title);if(title===null)return;let category=prompt('Category:',v.category||'Uncategorized');if(category===null)return;let rr=await fetch('/api/videos/'+encodeURIComponent(v.id)+'/metadata',{method:'POST',headers:{'Authorization':'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({title,category})});statusEl.textContent=rr.ok?'Updated '+title:'Update failed';if(rr.ok)await load()};li.append(a,document.createTextNode(' • '+(v.category||'Uncategorized')+' • '+(v.size/1048576).toFixed(1)+' MB '),publish,edit,del);ul.append(li)}
+for(let v of j.videos){if(filter.value&&v.category!==filter.value)continue;if(q&&!((v.title+' '+v.id+' '+v.category).toLowerCase().includes(q)))continue;let li=document.createElement('li'),a=document.createElement('a'),del=document.createElement('button'),publish=document.createElement('button');a.href=v.streamPath;a.textContent=v.title;a.style.color='#9bb8ff';a.target='_blank';del.textContent='Delete';del.style.marginLeft='10px';del.onclick=async()=>{if(!token.value){statusEl.textContent='Enter admin token to delete videos.';return}if(!confirm('Delete "'+v.title+'" from this server?'))return;del.disabled=true;let r=await fetch('/api/videos/'+encodeURIComponent(v.id),{method:'DELETE',headers:{'Authorization':'Bearer '+token.value}});statusEl.textContent=r.ok?'Deleted '+v.title:'Delete failed: '+await r.text();if(r.ok)await load();else del.disabled=false};publish.textContent='Publish to Community';publish.style.marginLeft='6px';publish.onclick=async()=>{if(!token.value||!document.getElementById('workerToken').value){statusEl.textContent='Enter both admin tokens first.';return}if(!confirm('Publish a cloud copy of "'+v.title+'"? The phone copy will remain unchanged.'))return;publish.disabled=true;statusEl.textContent='Publishing '+v.title+' to the public cloud…';try{let rr=await fetch('/api/publish',{method:'POST',headers:{'Authorization':'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({id:v.id,workerUrl:document.getElementById('workerUrl').value,workerToken:document.getElementById('workerToken').value})});let result=await rr.json();if(!rr.ok)throw new Error(result.error||'Publish failed');statusEl.textContent='Published '+v.title+' to Community Videos. Refresh Anilarper to see it.';publish.textContent='Published';}catch(e){statusEl.textContent='Publish failed: '+e.message;publish.disabled=false}};let edit=document.createElement('button');edit.textContent='Organize';edit.style.marginLeft='6px';edit.onclick=async()=>{if(!token.value){statusEl.textContent='Enter admin token to organize videos.';return}let title=prompt('Video title:',v.title);if(title===null)return;let category=prompt('Category:',v.category||'Uncategorized');if(category===null)return;let rr=await fetch('/api/videos/'+encodeURIComponent(v.id)+'/metadata',{method:'POST',headers:{'Authorization':'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({title,category,visibility:v.visibility||'private'})});statusEl.textContent=rr.ok?'Updated '+title:'Update failed';if(rr.ok)await load()};let share=document.createElement('button');share.textContent=v.visibility==='public'?'Make private':'Share to Community';share.style.marginLeft='6px';share.onclick=async()=>{if(!token.value){statusEl.textContent='Enter phone server admin token first.';return}let visibility=v.visibility==='public'?'private':'public';let rr=await fetch('/api/videos/'+encodeURIComponent(v.id)+'/metadata',{method:'POST',headers:{'Authorization':'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({title:v.title,category:v.category,visibility})});let result=await rr.json();statusEl.textContent=rr.ok?(visibility==='public'?'Shared '+v.title+' with Community.':'Made '+v.title+' private.'):('Visibility update failed: '+(result.error||'Unknown error'));if(rr.ok)await load()};li.append(a,document.createTextNode(' • '+(v.category||'Uncategorized')+' • '+(v.size/1048576).toFixed(1)+' MB '),share,publish,edit,del);ul.append(li)}
 if(!j.videos.length)ul.textContent='No videos uploaded yet.'}
 async function upload(){let fs=[...document.getElementById('files').files];if(!token.value||!fs.length){statusEl.textContent='Enter token and select MP4 files.';return}
 for(let f of fs){statusEl.textContent='Uploading '+f.name+'…';bar.hidden=false;bar.value=0;
@@ -328,8 +384,8 @@ document.getElementById('files').value='';await load()}load();
 
 if __name__ == "__main__":
     print("Anilarper media server starting")
-    print(f"LAN address: http://PHONE_IP:{PORT}")
+    print(f"Local tunnel target: http://127.0.0.1:{PORT}")
     print("Admin token: loaded from protected local file (value hidden)")
     print(f"Media folder: {MEDIA}")
-    print("LAN prototype only. Do not expose plain HTTP directly to the public internet.")
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    print("Loopback only. Use Cloudflare Tunnel for secure remote access; do not expose port 8765.")
+    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
