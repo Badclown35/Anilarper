@@ -179,7 +179,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path.startswith("/media/"):
             name = unquote(path[len("/media/"):])
-            if name and Path(name).name == name: self.stream_file(MEDIA / name, True); return
+            if name and Path(name).name == name: self.stream_file(find_media_file(name), True); return
         self.send_error(404)
     def stream_file(self, file_path, head_only=False):
         if not file_path.is_file() or file_path.suffix.lower() != ".mp4": self.send_error(404); return
@@ -262,7 +262,8 @@ class Handler(BaseHTTPRequestHandler):
         if length <= 0 or length > MAX_UPLOAD:
             self.send_json(413, {"error": "Missing size or file exceeds 5 GiB limit."}); return
         dest = MEDIA / name
-        if dest.exists(): self.send_json(409, {"error": "File already exists."}); return
+        if any((folder / name).exists() for folder in MEDIA_DIRS):
+            self.send_json(409, {"error": "A video with that filename already exists in phone storage."}); return
         temp = MEDIA / (".upload-" + secrets.token_hex(8) + ".part")
         remaining = length
         try:
