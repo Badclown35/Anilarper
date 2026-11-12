@@ -15,6 +15,18 @@ This Python standard-library server stores MP4 files in a local `media/` folder.
 
 Keep the Termux session running while using the server. Android battery management, Wi-Fi sleep, and the phone being offline can interrupt service.
 
+## Publish phone videos to the public Community library
+
+The local server is still not a public streaming host. To make a phone-stored video visible to all Anilarper users, open the phone server page on the backup phone and use **Publish to Community** beside that video.
+
+1. Enter the phone server's local admin token.
+2. Enter the Cloudflare Worker admin token in the password field on the page. Do not paste it into chat or save it in screenshots.
+3. Confirm **Publish to Community** for the selected video.
+4. The server copies the video to the public Worker using authenticated multipart HTTPS uploads. The original phone copy remains unchanged.
+5. Refresh Community Videos in Anilarper; the published copy is now served by the public Worker.
+
+The Worker admin token is sent only for that publish operation and is not written to the phone server's files. The destination is restricted to HTTPS `workers.dev` addresses. Publishing consumes the Worker bucket's existing 10 GB quota; local phone free space is not added to the public cloud quota.
+
 ## API
 
 - `GET /api/health` — health check.
