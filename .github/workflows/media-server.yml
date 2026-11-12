@@ -2,8 +2,13 @@ name: Validate media server
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [ "ui-refresh/anime-ui" ]
+    paths:
+      - "media-server/**"
+      - ".github/workflows/media-server.yml"
   push:
-    branches: [ main ]
+    branches: [ main, "ui-refresh/**", "feature/public-phone-video-publish" ]
     paths:
       - "media-server/**"
       - ".github/workflows/media-server.yml"
