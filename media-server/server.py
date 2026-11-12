@@ -3,7 +3,7 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, unquote
-import hashlib, hmac, json, os, re, secrets, urllib.request, urllib.error
+import hashlib, hmac, json, os, re, secrets, shutil, urllib.request, urllib.error
 from urllib.parse import urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parent
@@ -155,6 +155,20 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers(); self.wfile.write(page); return
         if path == "/api/health":
             self.send_json(200, {"ok": True, "server": "AnilarperMedia", "version": 1}); return
+        if path == "/api/storage":
+            disk = shutil.disk_usage(ROOT.parent)
+            media_bytes = sum(
+                f.stat().st_size
+                for folder in MEDIA_DIRS
+                for f in folder.glob("*.mp4")
+                if f.is_file()
+            )
+            self.send_json(200, {
+                "totalBytes": disk.total,
+                "usedBytes": disk.used,
+                "freeBytes": disk.free,
+                "mediaBytes": media_bytes
+            }); return
         if path == "/api/videos":
             videos = []
             metadata = read_metadata()
