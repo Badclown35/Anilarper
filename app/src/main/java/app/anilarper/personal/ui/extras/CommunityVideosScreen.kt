@@ -50,13 +50,63 @@ private fun isPrivateLanHost(host: String): Boolean {
         (a == 172 && b in 16..31) || (a == 169 && b == 254)
 }
 
-private data class SharedVideo(val id: String, val title: String, val category: String, val size: Long, val streamPath: String)
+private data class SharedVideo(val id: String, val title: String, val category: String, val size: Long, val streamPath: String, val sourceUrl: String)
+private data class MediaCatalog(val videos: List<SharedVideo>, val usedBytes: Long, val pendingBytes: Long, val maxBytes: Long)
+
+private fun normalizeMediaServerAddress(raw: String): String? {
+    val normalized = raw.trim().trimEnd('/')
+    val parsed = runCatching { URL(normalized) }.getOrNull() ?: return null
+    val secureHttps = parsed.protocol == "https"
+    val privateLanHttp = parsed.protocol == "http" && isPrivateLanHost(parsed.host)
+    if ((!secureHttps && !privateLanHttp) || parsed.host.isBlank() ||
+        parsed.userInfo != null || parsed.query != null || parsed.ref != null) return null
+    return normalized
+}
+
+private fun fetchMediaCatalog(baseUrl: String): MediaCatalog {
+    val connection = (URL("$baseUrl/api/videos").openConnection() as HttpURLConnection)
+    connection.connectTimeout = 7000
+    connection.readTimeout = 12000
+    connection.requestMethod = "GET"
+    connection.instanceFollowRedirects = false
+    try {
+        if (connection.responseCode !in 200..299) error("HTTP ${connection.responseCode}")
+        val responseJson = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        val storageJson = responseJson.optJSONObject("storage")
+        val used = storageJson?.optLong("usedBytes", 0L)?.coerceAtLeast(0L) ?: 0L
+        val pending = storageJson?.optLong("pendingBytes", 0L)?.coerceAtLeast(0L) ?: 0L
+        val max = storageJson?.optLong("maxBytes", 0L)?.coerceAtLeast(0L) ?: 0L
+        val array = responseJson.optJSONArray("videos") ?: org.json.JSONArray()
+        val parsedVideos = buildList {
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val id = item.optString("id")
+                val path = item.optString("streamPath")
+                if (id.isNotBlank() && path.startsWith("/media/")) {
+                    add(SharedVideo(
+                        id,
+                        item.optString("title", id.removeSuffix(".mp4")),
+                        item.optString("category", "Uncategorized").ifBlank { "Uncategorized" },
+                        item.optLong("size").coerceAtLeast(0L),
+                        path,
+                        baseUrl
+                    ))
+                }
+            }
+        }
+        return MediaCatalog(parsedVideos, used, pending, max)
+    } finally {
+        connection.disconnect()
+    }
+}
 
 @Composable
 fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("anilarper_media", Context.MODE_PRIVATE) }
     var serverAddress by remember { mutableStateOf(prefs.getString("server_url", "https://anilarper-media-worker.dywone659.workers.dev") ?: "https://anilarper-media-worker.dywone659.workers.dev") }
+    var phoneServerAddress by remember { mutableStateOf(prefs.getString("phone_server_url", "") ?: "") }
+    var phoneStorageOnline by remember { mutableStateOf(false) }
     var connectedAddress by remember { mutableStateOf("") }
     var videos by remember { mutableStateOf<List<SharedVideo>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
@@ -105,7 +155,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
     fun playVideo(video: SharedVideo, resume: Boolean = false) {
         selected = video
         val encodedPath = Uri.encode(video.streamPath, "/")
-        player.setMediaItem(MediaItem.fromUri("$connectedAddress$encodedPath"))
+        player.setMediaItem(MediaItem.fromUri("${video.sourceUrl}$encodedPath"))
         player.prepare()
         if (resume && prefs.getString("last_video_id", null) == video.id) {
             player.seekTo(prefs.getLong("last_video_position", 0L).coerceAtLeast(0L))
@@ -142,64 +192,52 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
     }
 
     fun connect() {
-        val normalized = serverAddress.trim().trimEnd('/')
-        val parsedAddress = runCatching { URL(normalized) }.getOrNull()
-        if (parsedAddress == null) {
-            status = "Enter a valid server URL."
+        val normalized = normalizeMediaServerAddress(serverAddress)
+        if (normalized == null) {
+            status = "Enter a valid HTTPS cloud URL."
             return
         }
-        val secureHttps = parsedAddress.protocol == "https"
-        val privateLanHttp = parsedAddress.protocol == "http" && isPrivateLanHost(parsedAddress.host)
-        if ((!secureHttps && !privateLanHttp) || parsedAddress.host.isBlank() ||
-            parsedAddress.userInfo != null || parsedAddress.query != null || parsedAddress.ref != null) {
-            status = "Use HTTPS for remote servers, or HTTP only for a private LAN address (10.x, 192.168.x, 172.16–31.x, or .local)."
-            return
-        }
+        val phoneNormalized = if (phoneServerAddress.isBlank()) "" else normalizeMediaServerAddress(phoneServerAddress)
+            ?: run {
+                status = "Backup phone must use a private LAN address such as http://192.168.1.25:8765."
+                return
+            }
         scope.launch {
             loading = true
-            status = "Connecting…"
+            status = "Connecting to cloud and backup phone…"
             try {
-                val catalogResult = withContext(Dispatchers.IO) {
-                    val connection = (URL("$normalized/api/videos").openConnection() as HttpURLConnection)
-                    connection.connectTimeout = 10000
-                    connection.readTimeout = 15000
-                    connection.requestMethod = "GET"
-                    connection.instanceFollowRedirects = false
-                    try {
-                        if (connection.responseCode !in 200..299) error("Server returned HTTP ${connection.responseCode}")
-                        val body = connection.inputStream.bufferedReader().use { it.readText() }
-                        val responseJson = JSONObject(body)
-                val storageJson = responseJson.optJSONObject("storage")
-                val storage = Triple(storageJson?.optLong("usedBytes", 0L) ?: 0L, storageJson?.optLong("pendingBytes", 0L) ?: 0L, storageJson?.optLong("maxBytes", 10_000_000_000L) ?: 10_000_000_000L)
-                val array = responseJson.optJSONArray("videos") ?: org.json.JSONArray()
-                        val parsedVideos = buildList {
-                            for (i in 0 until array.length()) {
-                                val item = array.optJSONObject(i) ?: continue
-                                val id = item.optString("id")
-                                val path = item.optString("streamPath")
-                                if (id.isNotBlank() && path.startsWith("/media/")) {
-                                    add(SharedVideo(id, item.optString("title", id.removeSuffix(".mp4")),
-                                        item.optString("category", "Uncategorized").ifBlank { "Uncategorized" },
-                                        item.optLong("size").coerceAtLeast(0L), path))
-                                }
-                            }
-                        }
-                        Pair(parsedVideos, storage)
-                    } finally { connection.disconnect() }
+                val catalogs = withContext(Dispatchers.IO) {
+                    val cloud = fetchMediaCatalog(normalized)
+                    val phone = if (phoneNormalized.isNotBlank()) {
+                        runCatching { fetchMediaCatalog(phoneNormalized) }.getOrNull()
+                    } else null
+                    Pair(cloud, phone)
                 }
-                usedBytes = catalogResult.second.first.coerceAtLeast(0L)
-                pendingBytes = catalogResult.second.second.coerceAtLeast(0L)
-                maxBytes = catalogResult.second.third.coerceAtLeast(1L)
-                val result = catalogResult.first
-                prefs.edit().putString("server_url", normalized).apply()
+                val cloud = catalogs.first
+                val phone = catalogs.second
+                val result = (cloud.videos + phone?.videos.orEmpty()).distinctBy { it.sourceUrl + it.id }
+                usedBytes = cloud.usedBytes + (phone?.usedBytes ?: 0L)
+                pendingBytes = cloud.pendingBytes + (phone?.pendingBytes ?: 0L)
+                maxBytes = (cloud.maxBytes + (phone?.maxBytes ?: 0L)).coerceAtLeast(1L)
+                phoneStorageOnline = phone != null
+                prefs.edit()
+                    .putString("server_url", normalized)
+                    .putString("phone_server_url", phoneNormalized)
+                    .apply()
                 connectedAddress = normalized
                 videos = result
-                status = (if (result.isEmpty()) "Connected. No shared videos yet." else "Connected • ${result.size} video(s)") +
-                    if (privateLanHttp) " • Local network only (HTTP)" else ""
+                status = "Connected • ${result.size} video(s) • Backup phone " +
+                    when {
+                        phone != null -> "ONLINE"
+                        phoneNormalized.isNotBlank() -> "OFFLINE"
+                        else -> "NOT CONFIGURED"
+                    }
             } catch (e: Exception) {
                 videos = emptyList()
-                status = "Couldn't connect: ${e.message ?: "Check the address and server."}"
-            } finally { loading = false }
+                status = "Couldn't connect to cloud: ${e.message ?: "Check the address and server."}"
+            } finally {
+                loading = false
+            }
         }
     }
 
@@ -262,12 +300,26 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
     ) {
         Text("COMMUNITY", color = Violet, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp)
         Text("Shared videos", color = White, fontSize = 27.sp, fontWeight = FontWeight.ExtraBold)
-        Text("Browse videos hosted by the Anilarper community server. Local HTTP works only on your private Wi-Fi; use HTTPS for remote sharing.", color = Muted, fontSize = 12.sp)
+        Text("Browse cloud and backup-phone videos together. The phone address works only while both devices are on the same Wi-Fi.", color = Muted, fontSize = 12.sp)
         OutlinedTextField(
             value = serverAddress,
             onValueChange = { serverAddress = it },
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Server address (HTTPS or local HTTP)") },
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = White, unfocusedTextColor = White,
+                focusedBorderColor = Violet, unfocusedBorderColor = Muted,
+                focusedLabelColor = Violet, unfocusedLabelColor = Muted,
+                cursorColor = Violet
+            )
+        )
+        OutlinedTextField(
+            value = phoneServerAddress,
+            onValueChange = { phoneServerAddress = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Backup phone address (same Wi-Fi)") },
+            placeholder = { Text("http://192.168.1.25:8765") },
             singleLine = true,
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = White, unfocusedTextColor = White,
@@ -291,6 +343,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
             }
         }
         Text(status, color = Muted, fontSize = 12.sp)
+        Text(if (phoneStorageOnline) "BACKUP PHONE • ONLINE" else "BACKUP PHONE • OFFLINE / NOT CONFIGURED", color = if (phoneStorageOnline) Color(0xFF83DDB0) else Muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
         if (connectedAddress.isNotBlank()) {
             val totalUsed = (usedBytes + pendingBytes).coerceAtLeast(0L)
             val fraction = (totalUsed.toFloat() / maxBytes.toFloat()).coerceIn(0f, 1f)
@@ -418,7 +471,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                             .clickable {
                                 selected = video
                                 val encodedPath = Uri.encode(video.streamPath, "/")
-                                player.setMediaItem(MediaItem.fromUri("${connectedAddress}$encodedPath"))
+                                player.setMediaItem(MediaItem.fromUri("${video.sourceUrl}$encodedPath"))
                                 player.prepare()
                                 player.play()
                             }.padding(14.dp),
