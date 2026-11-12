@@ -65,6 +65,12 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
     var usedBytes by remember { mutableLongStateOf(0L) }
     var pendingBytes by remember { mutableLongStateOf(0L) }
     var maxBytes by remember { mutableLongStateOf(10_000_000_000L) }
+    var cloudUsedBytes by remember { mutableLongStateOf(0L) }
+    var cloudMaxBytes by remember { mutableLongStateOf(10_000_000_000L) }
+    var phoneUsedBytes by remember { mutableLongStateOf(0L) }
+    var phoneFreeBytes by remember { mutableLongStateOf(0L) }
+    var phoneTotalBytes by remember { mutableLongStateOf(0L) }
+    var phoneOnline by remember { mutableStateOf(false) }
     var speedMenu by remember { mutableStateOf(false) }
     var playbackSpeed by remember { mutableFloatStateOf(1f) }
     var status by remember { mutableStateOf("Enter the secure server address to browse shared videos.") }
@@ -169,8 +175,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                         if (connection.responseCode !in 200..299) error("Server returned HTTP ${connection.responseCode}")
                         val body = connection.inputStream.bufferedReader().use { it.readText() }
                         val responseJson = JSONObject(body)
-                val storageJson = responseJson.optJSONObject("storage")
-                val storage = Triple(storageJson?.optLong("usedBytes", 0L) ?: 0L, storageJson?.optLong("pendingBytes", 0L) ?: 0L, storageJson?.optLong("maxBytes", 10_000_000_000L) ?: 10_000_000_000L)
+                val storage = responseJson.optJSONObject("storage") ?: JSONObject()
                 val array = responseJson.optJSONArray("videos") ?: org.json.JSONArray()
                         val parsedVideos = buildList {
                             for (i in 0 until array.length()) {
@@ -187,9 +192,18 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                         Pair(parsedVideos, storage)
                     } finally { connection.disconnect() }
                 }
-                usedBytes = catalogResult.second.first.coerceAtLeast(0L)
-                pendingBytes = catalogResult.second.second.coerceAtLeast(0L)
-                maxBytes = catalogResult.second.third.coerceAtLeast(1L)
+                val storage = catalogResult.second
+                usedBytes = storage.optLong("usedBytes", 0L).coerceAtLeast(0L)
+                pendingBytes = storage.optLong("pendingBytes", 0L).coerceAtLeast(0L)
+                maxBytes = storage.optLong("maxBytes", 10_000_000_000L).coerceAtLeast(1L)
+                val cloud = storage.optJSONObject("cloud")
+                cloudUsedBytes = cloud?.optLong("usedBytes", 0L)?.coerceAtLeast(0L) ?: usedBytes
+                cloudMaxBytes = cloud?.optLong("maxBytes", 10_000_000_000L)?.coerceAtLeast(1L) ?: maxBytes
+                val phone = storage.optJSONObject("phone")
+                phoneOnline = phone?.optBoolean("online", false) ?: false
+                phoneUsedBytes = phone?.optLong("usedBytes", 0L)?.coerceAtLeast(0L) ?: 0L
+                phoneFreeBytes = phone?.optLong("freeBytes", 0L)?.coerceAtLeast(0L) ?: 0L
+                phoneTotalBytes = phone?.optLong("totalBytes", 0L)?.coerceAtLeast(0L) ?: 0L
                 val result = catalogResult.first
                 prefs.edit().putString("server_url", normalized).apply()
                 connectedAddress = normalized
@@ -304,8 +318,15 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                 }
                 LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth(),
                     color = if (fraction >= .85f) Color(0xFFFFB86B) else Violet, trackColor = Panel2)
-                Text(String.format("%.2f / %.2f GB • %.2f GB pending", totalUsed / 1e9, maxBytes / 1e9, pendingBytes / 1e9),
+                Text(String.format("Combined: %.2f / %.2f GB • %.2f GB pending", totalUsed / 1e9, maxBytes / 1e9, pendingBytes / 1e9),
                     color = Muted, fontSize = 10.sp)
+                Text(String.format("Cloud: %.2f / %.2f GB", cloudUsedBytes / 1e9, cloudMaxBytes / 1e9),
+                    color = Muted, fontSize = 10.sp)
+                Text(
+                    if (phoneOnline) String.format("Backup phone: %.2f GB used • %.2f GB free / %.2f GB total", phoneUsedBytes / 1e9, phoneFreeBytes / 1e9, phoneTotalBytes / 1e9)
+                    else "Backup phone: offline — phone storage is not currently included",
+                    color = if (phoneOnline) Muted else Color(0xFFFFB86B), fontSize = 10.sp
+                )
                 if (fraction >= .95f) Text("Almost full — remove unused videos before uploading more.", color = Color(0xFFFFB86B), fontSize = 11.sp)
                 else if (fraction >= .85f) Text("Storage is getting low. Check the library before your next upload.", color = Color(0xFFFFB86B), fontSize = 11.sp)
             }
