@@ -42,7 +42,7 @@ def worker_json(worker_url, path, token, payload):
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         worker_url + path, data=data, method="POST",
-        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"}
     )
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
@@ -90,7 +90,7 @@ def publish_video_to_worker(filename, worker_url, worker_token):
                 request = urllib.request.Request(
                     worker_url + "/api/upload/part?" + query,
                     data=chunk, method="PUT",
-                    headers={"Authorization": "Bearer " + worker_token, "Content-Type": "video/mp4"}
+                    headers={"Authorization": "Bearer " + worker_token, "Content-Type": "video/mp4", "Accept": "application/json", "User-Agent": "Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"}
                 )
                 try:
                     with urllib.request.urlopen(request, timeout=120) as response:
