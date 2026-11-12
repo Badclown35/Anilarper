@@ -25,3 +25,23 @@ jobs:
           python-version: "3.12"
       - name: Compile media server
         run: python -m py_compile media-server/server.py
+      - name: Check embedded management-page JavaScript
+        run: |
+          python - <<'PY'
+          import ast
+          import re
+          from pathlib import Path
+          tree = ast.parse(Path("media-server/server.py").read_text())
+          page = None
+          for node in tree.body:
+              if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "PAGE" for t in node.targets):
+                  page = ast.literal_eval(node.value)
+                  break
+          if page is None:
+              raise SystemExit("PAGE template not found")
+          scripts = re.findall(r"<script>(.*?)</script>", page, re.S)
+          if len(scripts) != 1:
+              raise SystemExit("Expected exactly one management-page script")
+          Path("/tmp/anilarper-phone-page.js").write_text(scripts[0])
+          PY
+          node --check /tmp/anilarper-phone-page.js
