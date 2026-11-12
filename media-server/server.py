@@ -304,7 +304,7 @@ document.getElementById('files').value='';await load()}load();
 if __name__ == "__main__":
     print("Anilarper media server starting")
     print(f"LAN address: http://PHONE_IP:{PORT}")
-    print(f"Admin token: {TOKEN}")
+    print("Admin token: loaded from protected local file (value hidden)")
     print(f"Media folder: {MEDIA}")
     print("LAN prototype only. Do not expose plain HTTP directly to the public internet.")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
