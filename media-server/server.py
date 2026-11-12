@@ -342,8 +342,8 @@ document.getElementById('files').value='';await load()}load();
 
 if __name__ == "__main__":
     print("Anilarper media server starting")
-    print(f"LAN address: http://PHONE_IP:{PORT}")
+    print(f"Local tunnel target: http://127.0.0.1:{PORT}")
     print("Admin token: loaded from protected local file (value hidden)")
     print(f"Media folder: {MEDIA}")
-    print("LAN prototype only. Do not expose plain HTTP directly to the public internet.")
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    print("Loopback only. Use Cloudflare Tunnel for secure remote access; do not expose port 8765.")
+    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
