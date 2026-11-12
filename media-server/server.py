@@ -3,7 +3,8 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, unquote
-import hashlib, hmac, json, os, re, secrets
+import hashlib, hmac, json, os, re, secrets, urllib.request, urllib.error
+from urllib.parse import urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parent
 MEDIA = ROOT / "media"
@@ -36,6 +37,85 @@ def safe_name(value):
     name = re.sub(r"[^A-Za-z0-9._ -]", "_", name).strip(" .")
     if not name or not name.lower().endswith(".mp4"): raise ValueError("Only .mp4 files are accepted.")
     return name[:180]
+
+def worker_json(worker_url, path, token, payload):
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        worker_url + path, data=data, method="POST",
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read(2048).decode("utf-8", "replace")
+        raise RuntimeError("Cloud Worker returned HTTP " + str(exc.code) + ": " + detail[:300])
+
+def publish_video_to_worker(filename, worker_url, worker_token):
+    parsed = urlsplit(worker_url)
+    host = (parsed.hostname or "").lower()
+    if (parsed.scheme != "https" or not host.endswith(".workers.dev") or
+        parsed.username or parsed.password or parsed.port or
+        parsed.path not in ("", "/") or parsed.query or parsed.fragment):
+        raise ValueError("Use your HTTPS Cloudflare workers.dev URL.")
+    worker_url = worker_url.rstrip("/")
+    path = safe_name(filename)
+    media_file = MEDIA / path
+    if not media_file.is_file():
+        raise FileNotFoundError("That phone video no longer exists.")
+    size = media_file.stat().st_size
+    if size <= 0 or size > MAX_UPLOAD:
+        raise ValueError("Video must be between 1 byte and 5 GiB.")
+    metadata = read_metadata().get(path, {})
+    title = clean_text(metadata.get("title")) or Path(path).stem
+    category = clean_text(metadata.get("category")) or "Uncategorized"
+    session = None
+    try:
+        session = worker_json(worker_url, "/api/upload/start", worker_token, {
+            "filename": path, "title": title, "category": category, "size": size
+        })
+        upload_id = str(session["uploadId"])
+        remote_id = str(session["id"])
+        part_size = int(session.get("partSize", 0))
+        if not 0 < part_size <= 10 * 1024 * 1024:
+            raise RuntimeError("Cloud Worker returned an invalid upload part size.")
+        parts = []
+        with media_file.open("rb") as source:
+            part_number = 1
+            while True:
+                chunk = source.read(part_size)
+                if not chunk:
+                    break
+                query = urlencode({"id": remote_id, "uploadId": upload_id, "partNumber": part_number})
+                request = urllib.request.Request(
+                    worker_url + "/api/upload/part?" + query,
+                    data=chunk, method="PUT",
+                    headers={"Authorization": "Bearer " + worker_token, "Content-Type": "video/mp4"}
+                )
+                try:
+                    with urllib.request.urlopen(request, timeout=120) as response:
+                        part = json.loads(response.read().decode("utf-8"))
+                except urllib.error.HTTPError as exc:
+                    detail = exc.read(2048).decode("utf-8", "replace")
+                    raise RuntimeError("Cloud upload part " + str(part_number) + " failed (HTTP " +
+                                       str(exc.code) + "): " + detail[:200])
+                if int(part.get("partNumber", 0)) != part_number or not part.get("etag"):
+                    raise RuntimeError("Cloud Worker returned an invalid upload part receipt.")
+                parts.append(part)
+                part_number += 1
+        completed = worker_json(worker_url, "/api/upload/complete", worker_token, {
+            "id": remote_id, "uploadId": upload_id, "parts": parts
+        })
+        return completed.get("video", {"id": remote_id, "title": title, "size": size})
+    except Exception:
+        if session and session.get("id") and session.get("uploadId"):
+            try:
+                worker_json(worker_url, "/api/upload/abort", worker_token, {
+                    "id": session["id"], "uploadId": session["uploadId"]
+                })
+            except Exception:
+                pass
+        raise
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "AnilarperMedia/0.1"
@@ -111,6 +191,25 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError): pass
     def do_POST(self):
         parsed = urlsplit(self.path)
+        if parsed.path == "/api/publish":
+            if not self.authorized():
+                self.send_json(401, {"error": "Unauthorized"}); return
+            try:
+                body_length = int(self.headers.get("Content-Length", "0"))
+                if body_length <= 0 or body_length > 8192:
+                    self.send_json(413, {"error": "Publish request is too large."}); return
+                payload = json.loads(self.rfile.read(body_length).decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("Invalid publish request.")
+                worker_url = str(payload.get("workerUrl", "")).strip()
+                worker_token = str(payload.get("workerToken", "")).strip()
+                if not worker_token or len(worker_token) < 32:
+                    raise ValueError("Enter the Cloud Worker admin token.")
+                result = publish_video_to_worker(payload.get("id", ""), worker_url, worker_token)
+                self.send_json(200, {"ok": True, "video": result})
+            except Exception as exc:
+                self.send_json(400, {"error": str(exc)[:300]})
+            return
         if parsed.path.startswith("/api/videos/") and parsed.path.endswith("/metadata"):
             if not self.authorized(): self.send_json(401, {"error": "Unauthorized"}); return
             name = unquote(parsed.path[len("/api/videos/"):-len("/metadata")].strip("/"))
@@ -179,8 +278,11 @@ input,button{font:inherit;padding:12px;border-radius:9px;border:1px solid #555;b
 input[type=file]{width:100%;box-sizing:border-box;margin:12px 0}button{cursor:pointer;background:#315bd6;border:0}
 .card{background:#1b222c;padding:16px;border-radius:12px;margin:12px 0}small{color:#aab4c2}
 li{margin:12px 0;overflow-wrap:anywhere}progress{width:100%;height:18px}</style></head><body>
-<h1>Anilarper Media</h1><p><small>Home server • MP4 files only</small></p>
-<div class="card"><label>Admin token<br><input id="token" type="password" autocomplete="off" style="width:100%;box-sizing:border-box" placeholder="Paste token from Termux"></label>
+<h1>Anilarper Media</h1><p><small>Phone storage • MP4 files only</small></p>
+<div class="card"><label>Phone server admin token<br><input id="token" type="password" autocomplete="off" style="width:100%;box-sizing:border-box" placeholder="Paste token from Termux"></label>
+<label>Public Cloud Worker URL<br><input id="workerUrl" value="https://anilarper-media-worker.dywone659.workers.dev" style="width:100%;box-sizing:border-box"></label>
+<label>Cloud Worker admin token<br><input id="workerToken" type="password" autocomplete="off" style="width:100%;box-sizing:border-box" placeholder="Enter privately; never share it"></label>
+<p><small>Use Publish on a phone video to copy it into the public cloud library. The phone copy stays untouched.</small></p>
 <label>Display title (optional)<br><input id="title" placeholder="Defaults to filename" style="width:100%;box-sizing:border-box"></label><p><label>Category<br><input id="category" list="categories" value="Uncategorized" style="width:100%;box-sizing:border-box"></label><datalist id="categories"><option>Anime</option><option>Movies</option><option>Episodes</option><option>Clips</option><option>Trailers</option><option>Other</option></datalist></p><input id="files" type="file" accept="video/mp4,.mp4" multiple><button onclick="upload()">Upload selected MP4s</button>
 <p id="status"></p><progress id="progress" value="0" max="100" hidden></progress></div>
 <div class="card"><h2>Shared videos</h2><input id="search" placeholder="Search videos…" oninput="load()" style="width:100%;box-sizing:border-box"><p><select id="filter" onchange="load()"><option value="">All categories</option></select> <button onclick="load()">Refresh list</button></p><ul id="list"></ul></div>
@@ -188,7 +290,7 @@ li{margin:12px 0;overflow-wrap:anywhere}progress{width:100%;height:18px}</style>
 const token=document.getElementById('token'), statusEl=document.getElementById('status'), bar=document.getElementById('progress');
 async function load(){let r=await fetch('/api/videos');let j=await r.json();let ul=document.getElementById('list');ul.replaceChildren();
 let filter=document.getElementById('filter'),previous=filter.value,cats=[...new Set(j.videos.map(v=>v.category||'Uncategorized'))].sort();filter.replaceChildren(new Option('All categories',''));for(let c of cats)filter.add(new Option(c,c));filter.value=cats.includes(previous)?previous:'';let q=document.getElementById('search').value.toLowerCase();
-for(let v of j.videos){if(filter.value&&v.category!==filter.value)continue;if(q&&!((v.title+' '+v.id+' '+v.category).toLowerCase().includes(q)))continue;let li=document.createElement('li'),a=document.createElement('a'),del=document.createElement('button');a.href=v.streamPath;a.textContent=v.title;a.style.color='#9bb8ff';a.target='_blank';del.textContent='Delete';del.style.marginLeft='10px';del.onclick=async()=>{if(!token.value){statusEl.textContent='Enter admin token to delete videos.';return}if(!confirm('Delete "'+v.title+'" from this server?'))return;del.disabled=true;let r=await fetch('/api/videos/'+encodeURIComponent(v.id),{method:'DELETE',headers:{'Authorization':'Bearer '+token.value}});statusEl.textContent=r.ok?'Deleted '+v.title:'Delete failed: '+await r.text();if(r.ok)await load();else del.disabled=false};let edit=document.createElement('button');edit.textContent='Organize';edit.style.marginLeft='6px';edit.onclick=async()=>{if(!token.value){statusEl.textContent='Enter admin token to organize videos.';return}let title=prompt('Video title:',v.title);if(title===null)return;let category=prompt('Category:',v.category||'Uncategorized');if(category===null)return;let rr=await fetch('/api/videos/'+encodeURIComponent(v.id)+'/metadata',{method:'POST',headers:{'Authorization':'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({title,category})});statusEl.textContent=rr.ok?'Updated '+title:'Update failed';if(rr.ok)await load()};li.append(a,document.createTextNode(' • '+(v.category||'Uncategorized')+' • '+(v.size/1048576).toFixed(1)+' MB '),edit,del);ul.append(li)}
+for(let v of j.videos){if(filter.value&&v.category!==filter.value)continue;if(q&&!((v.title+' '+v.id+' '+v.category).toLowerCase().includes(q)))continue;let li=document.createElement('li'),a=document.createElement('a'),del=document.createElement('button'),publish=document.createElement('button');a.href=v.streamPath;a.textContent=v.title;a.style.color='#9bb8ff';a.target='_blank';del.textContent='Delete';del.style.marginLeft='10px';del.onclick=async()=>{if(!token.value){statusEl.textContent='Enter admin token to delete videos.';return}if(!confirm('Delete "'+v.title+'" from this server?'))return;del.disabled=true;let r=await fetch('/api/videos/'+encodeURIComponent(v.id),{method:'DELETE',headers:{'Authorization':'Bearer '+token.value}});statusEl.textContent=r.ok?'Deleted '+v.title:'Delete failed: '+await r.text();if(r.ok)await load();else del.disabled=false};publish.textContent='Publish to Community';publish.style.marginLeft='6px';publish.onclick=async()=>{if(!token.value||!document.getElementById('workerToken').value){statusEl.textContent='Enter both admin tokens first.';return}if(!confirm('Publish a cloud copy of "'+v.title+'"? The phone copy will remain unchanged.'))return;publish.disabled=true;statusEl.textContent='Publishing '+v.title+' to the public cloud…';try{let rr=await fetch('/api/publish',{method:'POST',headers:{'Authorization':'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({id:v.id,workerUrl:document.getElementById('workerUrl').value,workerToken:document.getElementById('workerToken').value})});let result=await rr.json();if(!rr.ok)throw new Error(result.error||'Publish failed');statusEl.textContent='Published '+v.title+' to Community Videos. Refresh Anilarper to see it.';publish.textContent='Published';}catch(e){statusEl.textContent='Publish failed: '+e.message;publish.disabled=false}};let edit=document.createElement('button');edit.textContent='Organize';edit.style.marginLeft='6px';edit.onclick=async()=>{if(!token.value){statusEl.textContent='Enter admin token to organize videos.';return}let title=prompt('Video title:',v.title);if(title===null)return;let category=prompt('Category:',v.category||'Uncategorized');if(category===null)return;let rr=await fetch('/api/videos/'+encodeURIComponent(v.id)+'/metadata',{method:'POST',headers:{'Authorization':'Bearer '+token.value,'Content-Type':'application/json'},body:JSON.stringify({title,category})});statusEl.textContent=rr.ok?'Updated '+title:'Update failed';if(rr.ok)await load()};li.append(a,document.createTextNode(' • '+(v.category||'Uncategorized')+' • '+(v.size/1048576).toFixed(1)+' MB '),publish,edit,del);ul.append(li)}
 if(!j.videos.length)ul.textContent='No videos uploaded yet.'}
 async function upload(){let fs=[...document.getElementById('files').files];if(!token.value||!fs.length){statusEl.textContent='Enter token and select MP4 files.';return}
 for(let f of fs){statusEl.textContent='Uploading '+f.name+'…';bar.hidden=false;bar.value=0;
