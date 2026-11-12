@@ -9,6 +9,9 @@ from urllib.parse import urlencode, urlsplit
 ROOT = Path(__file__).resolve().parent
 MEDIA = ROOT / "media"
 MEDIA.mkdir(exist_ok=True)
+# Also index the sibling storage folder used by the earlier Termux setup.
+SECONDARY_MEDIA = ROOT.parent / "media"
+MEDIA_DIRS = (MEDIA, SECONDARY_MEDIA) if SECONDARY_MEDIA != MEDIA else (MEDIA,)
 TOKEN_FILE = ROOT / ".admin_token"
 META_FILE = ROOT / "video_metadata.json"
 MAX_UPLOAD = 5 * 1024 * 1024 * 1024
@@ -23,11 +26,28 @@ TOKEN = TOKEN_FILE.read_text(encoding="utf-8").strip()
 if len(TOKEN) < 32: raise RuntimeError("Invalid admin token. Remove .admin_token and restart.")
 
 def read_metadata():
-    try:
-        value = json.loads(META_FILE.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    # Merge the older top-level metadata first; active server metadata wins.
+    merged = {}
+    for metadata_file in (ROOT.parent / "video_metadata.json", META_FILE):
+        try:
+            value = json.loads(metadata_file.read_text(encoding="utf-8"))
+            if isinstance(value, dict): merged.update(value)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return merged
+
+def write_metadata(value):
+    data = json.dumps(value, ensure_ascii=False, indent=2)
+    META_FILE.write_text(data, encoding="utf-8")
+    sibling = ROOT.parent / "video_metadata.json"
+    if sibling != META_FILE:
+        sibling.write_text(data, encoding="utf-8")
+
+def find_media_file(filename):
+    for folder in MEDIA_DIRS:
+        candidate = folder / filename
+        if candidate.is_file(): return candidate
+    return MEDIA / filename
 
 def clean_text(value, limit=100):
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
@@ -60,7 +80,7 @@ def publish_video_to_worker(filename, worker_url, worker_token):
         raise ValueError("Use your HTTPS Cloudflare workers.dev URL.")
     worker_url = worker_url.rstrip("/")
     path = safe_name(filename)
-    media_file = MEDIA / path
+    media_file = find_media_file(path)
     if not media_file.is_file():
         raise FileNotFoundError("That phone video no longer exists.")
     size = media_file.stat().st_size
@@ -138,7 +158,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/videos":
             videos = []
             metadata = read_metadata()
-            for f in sorted(MEDIA.glob("*.mp4"), key=lambda p: p.name.lower()):
+            files_by_name = {}
+            for folder in MEDIA_DIRS:
+                for candidate in folder.glob("*.mp4"):
+                    if candidate.is_file(): files_by_name.setdefault(candidate.name, candidate)
+            for f in sorted(files_by_name.values(), key=lambda p: p.name.lower()):
                 if f.is_file():
                     st = f.stat()
                     meta = metadata.get(f.name, {})
@@ -149,7 +173,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/media/"):
             name = unquote(path[len("/media/"):])
             if not name or Path(name).name != name: self.send_error(404); return
-            self.stream_file(MEDIA / name); return
+            self.stream_file(find_media_file(name)); return
         self.send_error(404)
     def do_HEAD(self):
         path = urlsplit(self.path).path
@@ -213,7 +237,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/videos/") and parsed.path.endswith("/metadata"):
             if not self.authorized(): self.send_json(401, {"error": "Unauthorized"}); return
             name = unquote(parsed.path[len("/api/videos/"):-len("/metadata")].strip("/"))
-            if not name or Path(name).name != name or not (MEDIA / name).is_file(): self.send_error(404); return
+            if not name or Path(name).name != name or not find_media_file(name).is_file(): self.send_error(404); return
             try:
                 body_length = int(self.headers.get("Content-Length", "0"))
                 if body_length <= 0 or body_length > 4096:
@@ -224,7 +248,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Metadata must be a JSON object.")
                 metadata = read_metadata()
                 metadata[name] = {"title": clean_text(payload.get("title"), 120) or Path(name).stem, "category": clean_text(payload.get("category"), 40) or "Uncategorized"}
-                META_FILE.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+                write_metadata(metadata)
                 self.send_json(200, {"ok": True, "id": name, **metadata[name]})
             except Exception as exc: self.send_json(400, {"error": "Invalid metadata: " + str(exc)[:100]})
             return
@@ -252,7 +276,7 @@ class Handler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             metadata = read_metadata()
             metadata[name] = {"title": clean_text(query.get("title", [Path(name).stem])[0], 120) or Path(name).stem, "category": clean_text(query.get("category", ["Uncategorized"])[0], 40) or "Uncategorized"}
-            META_FILE.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            write_metadata(metadata)
         except Exception as exc:
             temp.unlink(missing_ok=True)
             self.send_json(400, {"error": "Upload failed: " + str(exc)[:120]}); return
@@ -264,11 +288,11 @@ class Handler(BaseHTTPRequestHandler):
         name = unquote(path[len("/api/videos/"):])
         if not name or Path(name).name != name or not name.lower().endswith(".mp4"):
             self.send_error(400); return
-        target = MEDIA / name
+        target = find_media_file(name)
         if not target.is_file(): self.send_error(404); return
         target.unlink()
         metadata = read_metadata(); metadata.pop(name, None)
-        META_FILE.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_metadata(metadata)
         self.send_json(200, {"ok": True, "deleted": name})
 
 PAGE = r"""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
