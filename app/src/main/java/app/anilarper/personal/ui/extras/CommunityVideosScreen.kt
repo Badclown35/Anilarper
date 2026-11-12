@@ -197,11 +197,17 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
             status = "Enter a valid HTTPS cloud URL."
             return
         }
-        val phoneNormalized = if (phoneServerAddress.isBlank()) "" else normalizeMediaServerAddress(phoneServerAddress)
-            ?: run {
+        val phoneNormalized: String
+        if (phoneServerAddress.isBlank()) {
+            phoneNormalized = ""
+        } else {
+            val validatedPhoneAddress = normalizeMediaServerAddress(phoneServerAddress)
+            if (validatedPhoneAddress == null) {
                 status = "Backup phone must use a private LAN address such as http://192.168.1.25:8765."
                 return
             }
+            phoneNormalized = validatedPhoneAddress
+        }
         scope.launch {
             loading = true
             status = "Connecting to cloud and backup phone…"
