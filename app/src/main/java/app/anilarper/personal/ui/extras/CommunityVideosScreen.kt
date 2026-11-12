@@ -323,7 +323,7 @@ fun CommunityVideosScreen(modifier: Modifier = Modifier, onFullscreenChange: (Bo
                 Text(String.format("Cloud: %.2f / %.2f GB", cloudUsedBytes / 1e9, cloudMaxBytes / 1e9),
                     color = Muted, fontSize = 10.sp)
                 Text(
-                    if (phoneOnline) String.format("Backup phone: %.2f GB used • %.2f GB free / %.2f GB total", phoneUsedBytes / 1e9, phoneFreeBytes / 1e9, phoneTotalBytes / 1e9)
+                    if (phoneOnline) String.format("Backup phone: %.2f GB media used • %.2f GB free / %.2f GB media capacity", phoneUsedBytes / 1e9, phoneFreeBytes / 1e9, phoneTotalBytes / 1e9)
                     else "Backup phone: offline — phone storage is not currently included",
                     color = if (phoneOnline) Muted else Color(0xFFFFB86B), fontSize = 10.sp
                 )
